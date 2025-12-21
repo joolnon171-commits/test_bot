@@ -1,12 +1,17 @@
-# db.py
+# db.py - полная исправленная версия
+
 import json
 import requests
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- НАСТРОЙКИ JSONBIN.IO ---
-MASTER_BIN_ID = "694818b2d0ea881f40380c8c"  # Получите на https://jsonbin.io/
-JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Создайте bin и вставьте ID
+JSONBIN_API_KEY = "ВАШ_API_КЛЮЧ_JSONBIN"  # ЗАМЕНИТЕ НА ВАШ
+MASTER_BIN_ID = "ВАШ_MASTER_BIN_ID"  # ЗАМЕНИТЕ НА ВАШ
 
 API_URL = "https://api.jsonbin.io/v3/b"
 HEADERS = {
@@ -15,39 +20,66 @@ HEADERS = {
     "X-Bin-Meta": "false"
 }
 
+# --- КЭШИРОВАНИЕ ---
+_CACHE = {}
+_CACHE_TIMESTAMP = {}
+_CACHE_TTL = 3  # Кэш на 3 секунды
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ JSONBIN ---
 
-def load_data() -> dict:
-    """Загружает все данные из JSONBin"""
+def clear_cache(cache_key: str = None):
+    """Очищает кэш полностью или для конкретного ключа"""
+    global _CACHE, _CACHE_TIMESTAMP
+
+    if cache_key:
+        if cache_key in _CACHE:
+            del _CACHE[cache_key]
+        if cache_key in _CACHE_TIMESTAMP:
+            del _CACHE_TIMESTAMP[cache_key]
+        logger.debug(f"Кэш очищен для ключа: {cache_key}")
+    else:
+        _CACHE.clear()
+        _CACHE_TIMESTAMP.clear()
+        logger.debug("Весь кэш очищен")
+
+
+def load_data_cached(force_refresh: bool = False) -> dict:
+    """Загружает данные с кэшированием"""
+    global _CACHE, _CACHE_TIMESTAMP
+
+    cache_key = "main_data"
+    current_time = time.time()
+
+    # Принудительное обновление или кэш устарел
+    if (force_refresh or
+            cache_key not in _CACHE or
+            current_time - _CACHE_TIMESTAMP.get(cache_key, 0) > _CACHE_TTL):
+        data = _load_data_raw()
+        _CACHE[cache_key] = data
+        _CACHE_TIMESTAMP[cache_key] = current_time
+        logger.debug(f"Данные загружены из JSONBin (force: {force_refresh})")
+        return data
+
+    logger.debug("Используются кэшированные данные")
+    return _CACHE[cache_key]
+
+
+def _load_data_raw() -> dict:
+    """Загружает сырые данные из JSONBin"""
     try:
         response = requests.get(f"{API_URL}/{MASTER_BIN_ID}", headers=HEADERS, timeout=10)
         response.raise_for_status()
         data = response.json()
 
-        # ВАЖНО: Проверяем структуру
-        print(f"📥 Загружено данных: {len(str(data))} байт")
-
-        # Если данные пустые или имеют неправильную структуру
+        # Проверяем структуру
         if not data or not isinstance(data, dict):
-            print("⚠️ Получены пустые данные, создаем структуру...")
-            data = {
-                "users": {},
-                "sessions": {},
-                "transactions": {},
-                "debts": {},
-                "counters": {
-                    "session_id": 0,
-                    "transaction_id": 0,
-                    "debt_id": 0
-                }
-            }
+            logger.warning("Получены пустые данные, создаем структуру")
+            return _create_empty_structure()
 
-        # Убедимся что все необходимые ключи существуют
+        # Убедимся что все ключи существуют
         required_keys = ["users", "sessions", "transactions", "debts", "counters"]
         for key in required_keys:
             if key not in data:
-                print(f"⚠️ Ключ '{key}' отсутствует, создаем...")
+                logger.warning(f"Ключ '{key}' отсутствует, создаем")
                 if key == "counters":
                     data[key] = {"session_id": 0, "transaction_id": 0, "debt_id": 0}
                 else:
@@ -56,58 +88,62 @@ def load_data() -> dict:
         return data
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Ошибка сети при загрузке данных: {e}")
-        # Возвращаем базовую структуру
-        return {
-            "users": {},
-            "sessions": {},
-            "transactions": {},
-            "debts": {},
-            "counters": {
-                "session_id": 0,
-                "transaction_id": 0,
-                "debt_id": 0
-            }
-        }
+        logger.error(f"Ошибка сети при загрузке данных: {e}")
+        return _create_empty_structure()
     except Exception as e:
-        print(f"❌ Неизвестная ошибка при загрузке данных: {e}")
-        return {
-            "users": {},
-            "sessions": {},
-            "transactions": {},
-            "debts": {},
-            "counters": {
-                "session_id": 0,
-                "transaction_id": 0,
-                "debt_id": 0
-            }
+        logger.error(f"Неизвестная ошибка при загрузке данных: {e}")
+        return _create_empty_structure()
+
+
+def _create_empty_structure() -> dict:
+    """Создает пустую структуру данных"""
+    return {
+        "users": {},
+        "sessions": {},
+        "transactions": {},
+        "debts": {},
+        "counters": {
+            "session_id": 0,
+            "transaction_id": 0,
+            "debt_id": 0
         }
-def save_data(data: dict):
-    """Сохраняет данные в JSONBin"""
+    }
+
+
+def save_data(data: dict) -> bool:
+    """Сохраняет данные в JSONBin и очищает кэш"""
     try:
         response = requests.put(f"{API_URL}/{MASTER_BIN_ID}",
                                 json=data,
-                                headers=HEADERS)
+                                headers=HEADERS,
+                                timeout=10)
         response.raise_for_status()
+
+        # ОЧИЩАЕМ КЭШ ПОСЛЕ СОХРАНЕНИЯ - ЭТО ВАЖНО!
+        clear_cache()
+        logger.debug("Данные сохранены и кэш очищен")
         return True
+
     except Exception as e:
-        print(f"Ошибка сохранения данных: {e}")
+        logger.error(f"Ошибка сохранения данных: {e}")
         return False
 
 
 def get_next_id(counter_name: str) -> int:
     """Получает следующий ID"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)  # Всегда свежие данные для счетчиков
     data["counters"][counter_name] += 1
-    save_data(data)
-    return data["counters"][counter_name]
+
+    if save_data(data):
+        return data["counters"][counter_name]
+    return 0
 
 
 # --- ФУНКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ---
 
 def ensure_user_exists(user_id: int):
     """Создает пользователя если не существует"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
     user_id_str = str(user_id)
 
     if user_id_str not in data["users"]:
@@ -123,17 +159,26 @@ def ensure_user_exists(user_id: int):
 
 def get_user_role(user_id: int) -> str:
     """Получает роль пользователя"""
-    data = load_data()
-    user = data["users"].get(str(user_id))
+    data = load_data_cached()
+    user = data.get("users", {}).get(str(user_id))
     if user:
-        return user.get("role", "user")
+        # Обрабатываем оба формата: число или строку
+        stored_id = user.get("user_id")
+        if isinstance(stored_id, str):
+            try:
+                stored_id = int(stored_id)
+            except ValueError:
+                return "user"
+
+        if stored_id == user_id:
+            return user.get("role", "user")
     return "user"
 
 
 def check_user_access(user_id: int) -> bool:
     """Проверяет доступ пользователя"""
-    data = load_data()
-    user = data["users"].get(str(user_id))
+    data = load_data_cached()
+    user = data.get("users", {}).get(str(user_id))
 
     if not user:
         return False
@@ -163,11 +208,12 @@ def check_user_access(user_id: int) -> bool:
 
 def update_user_access(user_id: int, grant_access: bool, days: int = 0):
     """Обновляет доступ пользователя"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
     user_id_str = str(user_id)
 
     if user_id_str not in data["users"]:
         ensure_user_exists(user_id)
+        data = load_data_cached(force_refresh=True)  # Перезагружаем
 
     user = data["users"][user_id_str]
     user["has_access"] = grant_access
@@ -183,17 +229,18 @@ def update_user_access(user_id: int, grant_access: bool, days: int = 0):
 
 def get_all_users() -> List[Dict]:
     """Получает всех пользователей"""
-    data = load_data()
-    return list(data["users"].values())
+    data = load_data_cached()
+    return list(data.get("users", {}).values())
 
 
 def add_admin(user_id: int):
     """Добавляет администратора"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
     user_id_str = str(user_id)
 
     if user_id_str not in data["users"]:
         ensure_user_exists(user_id)
+        data = load_data_cached(force_refresh=True)
 
     data["users"][user_id_str]["role"] = "admin"
     data["users"][user_id_str]["has_access"] = True
@@ -202,7 +249,7 @@ def add_admin(user_id: int):
 
 def remove_admin(user_id: int):
     """Удаляет администратора"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
     user_id_str = str(user_id)
 
     if user_id_str in data["users"]:
@@ -212,16 +259,16 @@ def remove_admin(user_id: int):
 
 def grant_access_to_all():
     """Дает доступ всем пользователям"""
-    data = load_data()
-    for user_id, user_data in data["users"].items():
+    data = load_data_cached(force_refresh=True)
+    for user_id, user_data in data.get("users", {}).items():
         user_data["has_access"] = True
     save_data(data)
 
 
 def revoke_temporary_access():
     """Отзывает доступ у неоплативших пользователей"""
-    data = load_data()
-    for user_id, user_data in data["users"].items():
+    data = load_data_cached(force_refresh=True)
+    for user_id, user_data in data.get("users", {}).items():
         if user_data.get("role") != "admin":
             user_data["has_access"] = False
             user_data["access_until"] = None
@@ -232,7 +279,7 @@ def revoke_temporary_access():
 
 def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
     """Добавляет новую сессию"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
 
     session_id = get_next_id("session_id")
 
@@ -246,16 +293,18 @@ def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
         "created_at": datetime.now().isoformat()
     }
 
-    save_data(data)
-    return session_id
+    if save_data(data):
+        logger.info(f"Сессия '{name}' создана (ID: {session_id})")
+        return session_id
+    return 0
 
 
 def get_user_sessions(user_id: int) -> List[tuple]:
     """Получает сессии пользователя"""
-    data = load_data()
+    data = load_data_cached()
     sessions = []
 
-    for session in data["sessions"].values():
+    for session in data.get("sessions", {}).values():
         if session["user_id"] == user_id:
             sessions.append((
                 session["id"],
@@ -265,13 +314,15 @@ def get_user_sessions(user_id: int) -> List[tuple]:
                 session["is_active"]
             ))
 
+    # Сортируем по ID (новые сначала)
+    sessions.sort(key=lambda x: x[0], reverse=True)
     return sessions
 
 
 def get_session_details(session_id: int) -> Optional[Dict]:
     """Получает детали сессии с расчетами"""
-    data = load_data()
-    session = data["sessions"].get(str(session_id))
+    data = load_data_cached()
+    session = data.get("sessions", {}).get(str(session_id))
 
     if not session:
         return None
@@ -284,17 +335,17 @@ def get_session_details(session_id: int) -> Optional[Dict]:
     i_owe = 0
 
     # Считаем транзакции
-    for trans in data["transactions"].values():
+    for trans in data.get("transactions", {}).values():
         if trans["session_id"] == session_id:
             if trans["type"] == "sale":
                 total_sales += trans["amount"]
-                total_expenses += trans["expense_amount"]
+                total_expenses += trans.get("expense_amount", 0)
                 sales_count += 1
             elif trans["type"] == "expense":
                 total_expenses += trans["amount"]
 
     # Считаем долги
-    for debt in data["debts"].values():
+    for debt in data.get("debts", {}).values():
         if debt["session_id"] == session_id and not debt.get("is_repaid", False):
             if debt["type"] == "owed_to_me":
                 owed_to_me += debt["amount"]
@@ -320,8 +371,8 @@ def get_session_details(session_id: int) -> Optional[Dict]:
 
 def close_session(session_id: int):
     """Закрывает сессию"""
-    data = load_data()
-    session = data["sessions"].get(str(session_id))
+    data = load_data_cached(force_refresh=True)
+    session = data.get("sessions", {}).get(str(session_id))
 
     if session:
         session["is_active"] = False
@@ -333,8 +384,8 @@ def close_session(session_id: int):
 
 def add_transaction(session_id: int, trans_type: str, amount: float,
                     expense_amount: float = 0, description: str = "") -> int:
-    """Добавляет транзакцию (продажу или затрату)"""
-    data = load_data()
+    """Добавляет транзакцию"""
+    data = load_data_cached(force_refresh=True)
 
     transaction_id = get_next_id("transaction_id")
 
@@ -348,17 +399,18 @@ def add_transaction(session_id: int, trans_type: str, amount: float,
         "date": datetime.now().isoformat()
     }
 
-    save_data(data)
-    return transaction_id
+    if save_data(data):
+        return transaction_id
+    return 0
 
 
 def get_transactions_list(session_id: int, trans_type: str,
                           search_query: str = None) -> List[Dict]:
-    """Получает список транзакций с фильтрацией"""
-    data = load_data()
+    """Получает список транзакций"""
+    data = load_data_cached()
     transactions = []
 
-    for trans in data["transactions"].values():
+    for trans in data.get("transactions", {}).values():
         if trans["session_id"] == session_id and trans["type"] == trans_type:
             # Фильтр по поиску
             if search_query:
@@ -387,8 +439,8 @@ def get_transactions_list(session_id: int, trans_type: str,
 
 def update_transaction(trans_id: int, field: str, value: Any):
     """Обновляет поле транзакции"""
-    data = load_data()
-    trans = data["transactions"].get(str(trans_id))
+    data = load_data_cached(force_refresh=True)
+    trans = data.get("transactions", {}).get(str(trans_id))
 
     if trans:
         trans[field] = value
@@ -398,8 +450,8 @@ def update_transaction(trans_id: int, field: str, value: Any):
 
 def delete_transaction(trans_id: int):
     """Удаляет транзакцию"""
-    data = load_data()
-    if str(trans_id) in data["transactions"]:
+    data = load_data_cached(force_refresh=True)
+    if str(trans_id) in data.get("transactions", {}):
         del data["transactions"][str(trans_id)]
         save_data(data)
 
@@ -409,7 +461,7 @@ def delete_transaction(trans_id: int):
 def add_debt(session_id: int, debt_type: str, person_name: str,
              amount: float, description: str = "") -> int:
     """Добавляет долг"""
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
 
     debt_id = get_next_id("debt_id")
 
@@ -424,17 +476,18 @@ def add_debt(session_id: int, debt_type: str, person_name: str,
         "created_at": datetime.now().isoformat()
     }
 
-    save_data(data)
-    return debt_id
+    if save_data(data):
+        return debt_id
+    return 0
 
 
 def get_debts_list(session_id: int, debt_type: str,
                    search_query: str = None) -> List[Dict]:
     """Получает список долгов"""
-    data = load_data()
+    data = load_data_cached()
     debts = []
 
-    for debt in data["debts"].values():
+    for debt in data.get("debts", {}).values():
         if debt["session_id"] == session_id and debt["type"] == debt_type:
             # Фильтр по поиску
             if search_query:
@@ -465,8 +518,8 @@ def get_debts_list(session_id: int, debt_type: str,
 
 def update_debt(debt_id: int, field: str, value: Any):
     """Обновляет поле долга"""
-    data = load_data()
-    debt = data["debts"].get(str(debt_id))
+    data = load_data_cached(force_refresh=True)
+    debt = data.get("debts", {}).get(str(debt_id))
 
     if debt:
         if field == "is_repaid" and value == 1:
@@ -480,8 +533,8 @@ def update_debt(debt_id: int, field: str, value: Any):
 
 def delete_debt(debt_id: int):
     """Удаляет долг"""
-    data = load_data()
-    if str(debt_id) in data["debts"]:
+    data = load_data_cached(force_refresh=True)
+    if str(debt_id) in data.get("debts", {}):
         del data["debts"][str(debt_id)]
         save_data(data)
 
@@ -489,52 +542,36 @@ def delete_debt(debt_id: int):
 # --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ---
 
 def init_db():
-    """Инициализирует базу данных - создает админа если не существует"""
-    print("🔄 Инициализация базы данных...")
+    """Инициализирует базу данных"""
+    logger.info("Инициализация базы данных...")
 
-    data = load_data()
+    data = load_data_cached(force_refresh=True)
 
     # Создаем главного админа если нет
-    admin_id = 8382571809  # Ваш ID
+    admin_id = 8382571809
     admin_id_str = str(admin_id)
 
-    print(f"🔍 Проверяем админа с ID: {admin_id}")
-
-    # Убедимся что ключ 'users' существует
-    if "users" not in data:
-        data["users"] = {}
-        print("⚠️ Создали ключ 'users'")
-
-    if admin_id_str not in data["users"]:
-        print("⚠️ Админ не найден, создаем...")
-        data["users"][admin_id_str] = {
+    if admin_id_str not in data.get("users", {}):
+        logger.info("Админ не найден, создаем...")
+        data.setdefault("users", {})[admin_id_str] = {
             "user_id": admin_id,
             "role": "admin",
             "has_access": True,
             "access_until": None,
             "created_at": datetime.now().isoformat()
         }
-
-        # Сохраняем изменения
-        if save_data(data):
-            print("✅ Главный админ создан и сохранен")
-        else:
-            print("❌ Не удалось сохранить админа!")
+        save_data(data)
+        logger.info("Главный админ создан")
     else:
         admin_data = data["users"][admin_id_str]
-        print(f"✅ Админ найден:")
-        print(f"   Роль: {admin_data.get('role')}")
-        print(f"   Доступ: {admin_data.get('has_access')}")
-        print(f"   Создан: {admin_data.get('created_at')}")
+        logger.info(f"Админ найден: роль={admin_data.get('role')}")
 
-        # Проверяем, правильно ли установлена роль
+        # Исправляем если что-то не так
         if admin_data.get('role') != 'admin':
-            print("⚠️ Роль админа не 'admin', исправляем...")
             admin_data['role'] = 'admin'
             admin_data['has_access'] = True
             save_data(data)
-            print("✅ Роль исправлена на 'admin'")
+            logger.info("Роль админа исправлена")
 
-    print(f"📊 Всего пользователей: {len(data['users'])}")
-    print("✅ Инициализация завершена")
+    logger.info("Инициализация завершена")
     return True
