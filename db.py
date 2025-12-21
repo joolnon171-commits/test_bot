@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 # --- НАСТРОЙКИ JSONBIN.IO ---
-JSONBIN_API_KEY = "69481254ae596e708fa8aa21"  # Получите на https://jsonbin.io/
+JSONBIN_API_KEY = "694818b2d0ea881f40380c8c"  # Получите на https://jsonbin.io/
 MASTER_BIN_ID = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Создайте bin и вставьте ID
 
 API_URL = "https://api.jsonbin.io/v3/b"
@@ -21,12 +21,16 @@ HEADERS = {
 def load_data() -> dict:
     """Загружает все данные из JSONBin"""
     try:
-        response = requests.get(f"{API_URL}/{MASTER_BIN_ID}", headers=HEADERS)
+        response = requests.get(f"{API_URL}/{MASTER_BIN_ID}", headers=HEADERS, timeout=10)
         response.raise_for_status()
         data = response.json()
 
-        # Инициализация структуры если пусто
-        if not data:
+        # ВАЖНО: Проверяем структуру
+        print(f"📥 Загружено данных: {len(str(data))} байт")
+
+        # Если данные пустые или имеют неправильную структуру
+        if not data or not isinstance(data, dict):
+            print("⚠️ Получены пустые данные, создаем структуру...")
             data = {
                 "users": {},
                 "sessions": {},
@@ -38,11 +42,22 @@ def load_data() -> dict:
                     "debt_id": 0
                 }
             }
-            save_data(data)
+
+        # Убедимся что все необходимые ключи существуют
+        required_keys = ["users", "sessions", "transactions", "debts", "counters"]
+        for key in required_keys:
+            if key not in data:
+                print(f"⚠️ Ключ '{key}' отсутствует, создаем...")
+                if key == "counters":
+                    data[key] = {"session_id": 0, "transaction_id": 0, "debt_id": 0}
+                else:
+                    data[key] = {}
 
         return data
-    except Exception as e:
-        print(f"Ошибка загрузки данных: {e}")
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Ошибка сети при загрузке данных: {e}")
+        # Возвращаем базовую структуру
         return {
             "users": {},
             "sessions": {},
@@ -54,8 +69,19 @@ def load_data() -> dict:
                 "debt_id": 0
             }
         }
-
-
+    except Exception as e:
+        print(f"❌ Неизвестная ошибка при загрузке данных: {e}")
+        return {
+            "users": {},
+            "sessions": {},
+            "transactions": {},
+            "debts": {},
+            "counters": {
+                "session_id": 0,
+                "transaction_id": 0,
+                "debt_id": 0
+            }
+        }
 def save_data(data: dict):
     """Сохраняет данные в JSONBin"""
     try:
@@ -463,14 +489,24 @@ def delete_debt(debt_id: int):
 # --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ---
 
 def init_db():
-    """Инициализирует базу данных"""
+    """Инициализирует базу данных - создает админа если не существует"""
+    print("🔄 Инициализация базы данных...")
+
     data = load_data()
 
     # Создаем главного админа если нет
     admin_id = 8382571809  # Ваш ID
     admin_id_str = str(admin_id)
 
+    print(f"🔍 Проверяем админа с ID: {admin_id}")
+
+    # Убедимся что ключ 'users' существует
+    if "users" not in data:
+        data["users"] = {}
+        print("⚠️ Создали ключ 'users'")
+
     if admin_id_str not in data["users"]:
+        print("⚠️ Админ не найден, создаем...")
         data["users"][admin_id_str] = {
             "user_id": admin_id,
             "role": "admin",
@@ -478,7 +514,27 @@ def init_db():
             "access_until": None,
             "created_at": datetime.now().isoformat()
         }
-        save_data(data)
-        print("База данных инициализирована, главный админ создан")
+
+        # Сохраняем изменения
+        if save_data(data):
+            print("✅ Главный админ создан и сохранен")
+        else:
+            print("❌ Не удалось сохранить админа!")
     else:
-        print("База данных загружена")
+        admin_data = data["users"][admin_id_str]
+        print(f"✅ Админ найден:")
+        print(f"   Роль: {admin_data.get('role')}")
+        print(f"   Доступ: {admin_data.get('has_access')}")
+        print(f"   Создан: {admin_data.get('created_at')}")
+
+        # Проверяем, правильно ли установлена роль
+        if admin_data.get('role') != 'admin':
+            print("⚠️ Роль админа не 'admin', исправляем...")
+            admin_data['role'] = 'admin'
+            admin_data['has_access'] = True
+            save_data(data)
+            print("✅ Роль исправлена на 'admin'")
+
+    print(f"📊 Всего пользователей: {len(data['users'])}")
+    print("✅ Инициализация завершена")
+    return True
