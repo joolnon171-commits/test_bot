@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 # --- НАСТРОЙКИ JSONBIN.IO ---
-JSONBIN_API_KEY = "694818b2d0ea881f40380c8c"  # Получите на https://jsonbin.io/
-MASTER_BIN_ID = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Создайте bin и вставьте ID
+MASTER_BIN_ID = "694818b2d0ea881f40380c8c"  # Получите на https://jsonbin.io/
+JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Создайте bin и вставьте ID
 
 API_URL = "https://api.jsonbin.io/v3/b"
 HEADERS = {
