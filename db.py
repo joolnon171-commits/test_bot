@@ -10,8 +10,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- НАСТРОЙКИ JSONBIN.IO ---
-JSONBIN_API_KEY = "ВАШ_API_КЛЮЧ_JSONBIN"  # ЗАМЕНИТЕ НА ВАШ
-MASTER_BIN_ID = "ВАШ_MASTER_BIN_ID"  # ЗАМЕНИТЕ НА ВАШ
+JSONBIN_API_KEY = "694818b2d0ea881f40380c8c"  # ЗАМЕНИТЕ НА ВАШ
+MASTER_BIN_ID = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # ЗАМЕНИТЕ НА ВАШ
 
 API_URL = "https://api.jsonbin.io/v3/b"
 HEADERS = {
@@ -575,3 +575,11 @@ def init_db():
 
     logger.info("Инициализация завершена")
     return True
+
+
+# --- ОБРАТНАЯ СОВМЕСТИМОСТЬ ---
+def load_data() -> dict:
+    """Алиас для обратной совместимости (используется в keyboards.py)"""
+    import warnings
+    warnings.warn("load_data() устарела, используйте load_data_cached()", DeprecationWarning)
+    return load_data_cached()

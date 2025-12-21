@@ -1,8 +1,7 @@
-# keyboards.py
+# keyboards.py - полная исправленная версия
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardMarkup
 from aiogram.types import InlineKeyboardButton
-from db import load_data
 
 
 # --- ГЛАВНОЕ МЕНЮ И НАВИГАЦИЯ ---
@@ -109,10 +108,6 @@ def get_items_list_inline(items: list, item_type: str, session_id: int,
                           search_query: str = None) -> InlineKeyboardMarkup:
     """
     Генерирует клавиатуру для списков (транзакции, долги).
-    :param items: Список объектов (строк из БД)
-    :param item_type: 'transaction' или 'debt'
-    :param session_id: ID текущей сессии
-    :param search_query: Текущий поисковый запрос
     """
     builder = InlineKeyboardBuilder()
     for item in items:
@@ -160,34 +155,13 @@ def get_edit_item_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     if item_type == 'transaction':
-        # Узнаем тип транзакции (sale или expense)
-        data = load_data()
-        trans = data.get("transactions", {}).get(str(item_id))
-
-        if trans:
-            trans_type = trans.get("type", "sale")
-
-            if trans_type == "sale":
-                # Для продаж: сумма, затраты, описание
-                builder.add(InlineKeyboardButton(text="Сумма продажи",
-                                                 callback_data=f"edit_field_{item_type}_{item_id}_amount"))
-                builder.add(InlineKeyboardButton(text="Затраты",
-                                                 callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"))
-                builder.add(InlineKeyboardButton(text="Описание",
-                                                 callback_data=f"edit_field_{item_type}_{item_id}_description"))
-            elif trans_type == "expense":
-                # Для затрат: только сумма и описание (без затрат)
-                builder.add(
-                    InlineKeyboardButton(text="Сумма затрат", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
-                builder.add(InlineKeyboardButton(text="Описание",
-                                                 callback_data=f"edit_field_{item_type}_{item_id}_description"))
-        else:
-            # Если не удалось определить тип, показываем общие кнопки
-            builder.add(InlineKeyboardButton(text="Сумма", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
-            builder.add(
-                InlineKeyboardButton(text="Затраты", callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"))
-            builder.add(
-                InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
+        # Для транзакций показываем все возможные поля
+        builder.add(InlineKeyboardButton(text="Сумма", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
+        builder.add(
+            InlineKeyboardButton(text="Затраты", callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"))
+        builder.add(
+            InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
+        builder.adjust(2, 1)  # 2 в первом ряду, 1 во втором
 
     elif item_type == 'debt':
         builder.add(InlineKeyboardButton(text="Сумма", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
@@ -195,19 +169,9 @@ def get_edit_item_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
         builder.add(
             InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
         builder.add(InlineKeyboardButton(text="Погашен", callback_data=f"repay_debt_{item_id}"))
+        builder.adjust(2, 2)  # 2 в первом ряду, 2 во втором
 
     builder.add(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cancel_edit_{item_type}"))
-
-    # Настраиваем количество кнопок в ряду
-    if item_type == 'transaction':
-        # Проверяем тип транзакции для правильного расположения кнопок
-        if 'data' in locals() and trans and trans.get("type") == "expense":
-            builder.adjust(2, 1)  # 2 кнопки в первом ряду, 1 во втором
-        else:
-            builder.adjust(2, 1, 1)  # 2 кнопки в первом ряду, 1 во втором, 1 в третьем
-    else:
-        builder.adjust(2, 2, 1)  # Для долгов: 2, 2, 1
-
     return builder.as_markup()
 
 

@@ -1,4 +1,4 @@
-# handlers.py
+# handlers.py - важные исправления
 
 import logging
 import asyncio
@@ -17,7 +17,7 @@ from states import *
 
 # --- НАСТРОЙКИ ---
 ADMIN_ID = 8382571809
-CONTACT_URL = "https://t.me/SalesFlowManager"  # URL для связи с админом
+CONTACT_URL = "https://t.me/SalesFlowManager"
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +29,7 @@ async def show_main_menu(event: types.Message | types.CallbackQuery, state: FSMC
     user_id = event.from_user.id
     is_admin = get_user_role(user_id) == 'admin'
 
-    # Загружаем сессии с логированием
+    # Загружаем сессии
     sessions = get_user_sessions(user_id)
     logger.info(f"Пользователь {user_id}: найдено {len(sessions)} сессий")
 
@@ -49,59 +49,11 @@ async def show_main_menu(event: types.Message | types.CallbackQuery, state: FSMC
         await event.answer(welcome_text, reply_markup=get_main_menu_inline(sessions, is_admin))
 
 
-# В функции navigate исправьте обработку session_menu:
-async def navigate(callback: CallbackQuery, state: FSMContext):
-    action = callback.data.split('_', 1)[1]
-    await state.clear()
-
-    if action == "start":
-        await show_main_menu(callback, state)
-    elif action == "admin_panel":
-        try:
-            await callback.message.edit_text("Выберите действие в Админ-Панели:",
-                                             reply_markup=get_admin_panel_inline())
-        except Exception as e:
-            logger.error(f"Ошибка при редактировании сообщения: {e}")
-            await callback.bot.send_message(callback.from_user.id,
-                                            "Выберите действие в Админ-Панели:",
-                                            reply_markup=get_admin_panel_inline())
-    elif action == "create_session":
-        try:
-            await callback.message.edit_text("Введите название для новой сессии (макс. 50 символов):",
-                                             reply_markup=get_cancel_inline())
-        except Exception as e:
-            logger.error(f"Ошибка при редактировании сообщения: {e}")
-            await callback.bot.send_message(callback.from_user.id,
-                                            "Введите название для новой сессии (макс. 50 символов):",
-                                            reply_markup=get_cancel_inline())
-        await state.set_state(CreateSession.name)
-        await state.update_data(timestamp=datetime.now().timestamp())
-    elif action.startswith("session_"):
-        session_id = int(action.split('_', 1)[1])
-        logger.info(f"Переход к сессии {session_id}")
-        await show_session_menu(callback, state, session_id)
-    elif action == "menu":
-        # Кнопка "Назад в меню" из списков
-        session_id = (await state.get_data()).get('current_session_id')
-        if session_id:
-            logger.info(f"Возврат в меню сессии {session_id}")
-            await show_session_menu(callback, state, session_id)
-        else:
-            logger.info("Возврат в главное меню")
-            await show_main_menu(callback, state)
-    elif action == "cancel_search_transaction":
-        await show_transactions_list(callback, state, 'sale')
-    elif action == "cancel_search_debt":
-        debt_type = (await state.get_data()).get('debt_type')
-        await show_debts_list(callback, state, debt_type)
-
-    await callback.answer()
 async def show_session_menu(event: types.Message | types.CallbackQuery, state: FSMContext, session_id: int):
-    """
-    Показывает меню сессии. Умеет работать как с Message, так и с CallbackQuery.
-    """
+    """Показывает меню сессии."""
     await state.update_data(current_session_id=session_id)
     details = get_session_details(session_id)
+
     if not details:
         text = "Ошибка: сессия не найдена."
         reply_markup = get_main_menu_inline([], get_user_role(event.from_user.id) == 'admin')
@@ -252,6 +204,7 @@ async def navigate(callback: CallbackQuery, state: FSMContext):
         await state.update_data(timestamp=datetime.now().timestamp())
     elif action.startswith("session_"):
         session_id = int(action.split('_', 1)[1])
+        logger.info(f"Переход к сессии {session_id}")
         await show_session_menu(callback, state, session_id)
     elif action == "cancel_search_transaction":
         await show_transactions_list(callback, state, 'sale')
@@ -261,8 +214,10 @@ async def navigate(callback: CallbackQuery, state: FSMContext):
     elif action == "menu":  # Handles the "Back to menu" button from lists
         session_id = (await state.get_data()).get('current_session_id')
         if session_id:
+            logger.info(f"Возврат в меню сессии {session_id}")
             await show_session_menu(callback, state, session_id)
         else:
+            logger.info("Возврат в главное меню")
             await show_main_menu(callback, state)
 
     await callback.answer()
@@ -303,8 +258,12 @@ async def process_budget(message: Message, state: FSMContext):
         return await message.answer("Введите корректное положительное число.", reply_markup=get_cancel_inline())
 
     data = await state.get_data()
-    add_session(message.from_user.id, data['name'], budget, data['currency'])
-    await show_main_menu(message, state, f"✅ Сессия <b>'{data['name']}'</b> создана!")
+    session_id = add_session(message.from_user.id, data['name'], budget, data['currency'])
+
+    if session_id:
+        await show_main_menu(message, state, f"✅ Сессия <b>'{data['name']}'</b> создана!")
+    else:
+        await show_main_menu(message, state, "❌ Ошибка при создании сессии")
 
 
 # --- ОБРАБОТЧИКИ ДЕЙСТВИЙ В СЕССИИ ---
