@@ -10,8 +10,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- НАСТРОЙКИ JSONBIN.IO ---
-JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg"  # Это ваш API KEY!
-MASTER_BIN_ID = "694818b2d0ea881f40380c8c"             
+JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Это ваш API KEY!
+MASTER_BIN_ID = "694818b2d0ea881f40380c8c"
 
 API_URL = "https://api.jsonbin.io/v3/b"
 HEADERS = {
