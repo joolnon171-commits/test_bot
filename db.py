@@ -1,275 +1,484 @@
 # db.py
+import json
+import requests
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any
 
-import sqlite3
-import logging
-from datetime import datetime
-from typing import List, Dict, Optional, Any
+# --- НАСТРОЙКИ JSONBIN.IO ---
+JSONBIN_API_KEY = "69481254ae596e708fa8aa21"  # Получите на https://jsonbin.io/
+MASTER_BIN_ID = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Создайте bin и вставьте ID
 
-# Настройка логирования для модуля
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+API_URL = "https://api.jsonbin.io/v3/b"
+HEADERS = {
+    "Content-Type": "application/json",
+    "X-Master-Key": JSONBIN_API_KEY,
+    "X-Bin-Meta": "false"
+}
 
-DB_NAME = 'bot_database.db'
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ JSONBIN ---
 
-def _execute_query(query: str, params: tuple = (), fetch: str = None, many: bool = False) -> Optional[Any]:
-    """
-    Вспомогательная функция для выполнения запросов к БД.
-    :param query: SQL-запрос
-    :param params: Параметры для запроса
-    :param fetch: Тип выборки ('one', 'all', None)
-    :param many: Если True, fetchall вернет список кортежей
-    :return: Результат запроса
-    """
+def load_data() -> dict:
+    """Загружает все данные из JSONBin"""
     try:
-        with sqlite3.connect(DB_NAME) as conn:
-            conn.row_factory = sqlite3.Row  # Позволяет обращаться к колонкам по имени
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            result = None
-            if fetch == 'one':
-                result = cursor.fetchone()
-            elif fetch == 'all':
-                result = cursor.fetchall()
-            conn.commit()
-            return result
-    except sqlite3.Error as e:
-        logger.error(f"Ошибка при выполнении запроса к БД: {e}\nЗапрос: {query}\nПараметры: {params}")
-        return None
+        response = requests.get(f"{API_URL}/{MASTER_BIN_ID}", headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+
+        # Инициализация структуры если пусто
+        if not data:
+            data = {
+                "users": {},
+                "sessions": {},
+                "transactions": {},
+                "debts": {},
+                "counters": {
+                    "session_id": 0,
+                    "transaction_id": 0,
+                    "debt_id": 0
+                }
+            }
+            save_data(data)
+
+        return data
+    except Exception as e:
+        print(f"Ошибка загрузки данных: {e}")
+        return {
+            "users": {},
+            "sessions": {},
+            "transactions": {},
+            "debts": {},
+            "counters": {
+                "session_id": 0,
+                "transaction_id": 0,
+                "debt_id": 0
+            }
+        }
 
 
-def init_db() -> None:
-    """Инициализирует базу данных и создает/обновляет таблицы."""
-    queries = [
-        '''CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            role TEXT NOT NULL DEFAULT 'user',
-            has_access INTEGER NOT NULL DEFAULT 0,
-            access_until TEXT,
-            is_admin INTEGER NOT NULL DEFAULT 0
-        )''',
-        '''CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            name TEXT NOT NULL,
-            budget REAL NOT NULL,
-            currency TEXT NOT NULL,
-            creation_date TEXT NOT NULL,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
-        )''',
-        '''CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER,
-            type TEXT NOT NULL,
-            amount REAL NOT NULL,
-            expense_amount REAL DEFAULT 0,
-            description TEXT,
-            date TEXT NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES sessions (id)
-        )''',
-        '''CREATE TABLE IF NOT EXISTS debts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER,
-            type TEXT NOT NULL,
-            person_name TEXT NOT NULL,
-            amount REAL NOT NULL,
-            description TEXT,
-            date TEXT NOT NULL,
-            is_repaid INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (session_id) REFERENCES sessions (id)
-        )'''
-    ]
-    for query in queries:
-        _execute_query(query)
-
-    # Установка главного админа
-    _execute_query("INSERT OR IGNORE INTO users (user_id, is_admin) VALUES (?, 1)", (8382571809,))
-    logger.info("База данных инициализирована.")
+def save_data(data: dict):
+    """Сохраняет данные в JSONBin"""
+    try:
+        response = requests.put(f"{API_URL}/{MASTER_BIN_ID}",
+                                json=data,
+                                headers=HEADERS)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"Ошибка сохранения данных: {e}")
+        return False
 
 
-def ensure_user_exists(user_id: int) -> None:
-    """Гарантирует, что пользователь есть в БД. Если нет - создает."""
-    _execute_query("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    logger.debug(f"Пользователь {user_id} зарегистрирован в БД.")
+def get_next_id(counter_name: str) -> int:
+    """Получает следующий ID"""
+    data = load_data()
+    data["counters"][counter_name] += 1
+    save_data(data)
+    return data["counters"][counter_name]
+
+
+# --- ФУНКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ---
+
+def ensure_user_exists(user_id: int):
+    """Создает пользователя если не существует"""
+    data = load_data()
+    user_id_str = str(user_id)
+
+    if user_id_str not in data["users"]:
+        data["users"][user_id_str] = {
+            "user_id": user_id,
+            "role": "user",
+            "has_access": False,
+            "access_until": None,
+            "created_at": datetime.now().isoformat()
+        }
+        save_data(data)
 
 
 def get_user_role(user_id: int) -> str:
-    result = _execute_query("SELECT is_admin FROM users WHERE user_id = ?", (user_id,), fetch='one')
-    return 'admin' if result and result['is_admin'] else 'user'
+    """Получает роль пользователя"""
+    data = load_data()
+    user = data["users"].get(str(user_id))
+    if user:
+        return user.get("role", "user")
+    return "user"
 
 
 def check_user_access(user_id: int) -> bool:
-    result = _execute_query("SELECT has_access, access_until FROM users WHERE user_id = ?", (user_id,), fetch='one')
-    if not result:
+    """Проверяет доступ пользователя"""
+    data = load_data()
+    user = data["users"].get(str(user_id))
+
+    if not user:
         return False
 
-    has_access, access_until = result['has_access'], result['access_until']
-    if has_access and not access_until:
+    if user.get("role") == "admin":
         return True
 
-    if has_access and access_until:
+    if not user.get("has_access", False):
+        return False
+
+    # Проверяем срок доступа
+    access_until = user.get("access_until")
+    if access_until:
         try:
-            expiry_date = datetime.strptime(access_until, '%Y-%m-%d').date()
-            if datetime.now().date() <= expiry_date:
-                return True
-            else:
-                update_user_access(user_id, False)
+            until_date = datetime.fromisoformat(access_until)
+            if datetime.now() > until_date:
+                # Срок истек
+                user["has_access"] = False
+                user["access_until"] = None
+                save_data(data)
                 return False
-        except ValueError:
-            logger.warning(f"Неверный формат даты access_until для пользователя {user_id}")
-            return False
-    return False
+        except:
+            pass
+
+    return user.get("has_access", False)
 
 
-def update_user_access(user_id: int, grant: bool, days: int = None) -> None:
-    from datetime import timedelta
-    access_until = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d') if days and grant else None
-    _execute_query("UPDATE users SET has_access = ?, access_until = ? WHERE user_id = ?",
-                   (int(grant), access_until, user_id))
-    logger.info(f"Доступ пользователю {user_id} {'открыт' if grant else 'закрыт'}.")
+def update_user_access(user_id: int, grant_access: bool, days: int = 0):
+    """Обновляет доступ пользователя"""
+    data = load_data()
+    user_id_str = str(user_id)
+
+    if user_id_str not in data["users"]:
+        ensure_user_exists(user_id)
+
+    user = data["users"][user_id_str]
+    user["has_access"] = grant_access
+
+    if grant_access and days > 0:
+        until_date = datetime.now() + timedelta(days=days)
+        user["access_until"] = until_date.isoformat()
+    else:
+        user["access_until"] = None
+
+    save_data(data)
 
 
-def add_admin(user_id: int) -> None:
-    _execute_query("UPDATE users SET is_admin = 1 WHERE user_id = ?", (user_id,))
-    logger.info(f"Пользователь {user_id} назначен администратором.")
+def get_all_users() -> List[Dict]:
+    """Получает всех пользователей"""
+    data = load_data()
+    return list(data["users"].values())
 
 
-def remove_admin(user_id: int) -> None:
-    _execute_query("UPDATE users SET is_admin = 0 WHERE user_id = ?", (user_id,))
-    logger.info(f"Пользователь {user_id} удален из администраторов.")
+def add_admin(user_id: int):
+    """Добавляет администратора"""
+    data = load_data()
+    user_id_str = str(user_id)
+
+    if user_id_str not in data["users"]:
+        ensure_user_exists(user_id)
+
+    data["users"][user_id_str]["role"] = "admin"
+    data["users"][user_id_str]["has_access"] = True
+    save_data(data)
 
 
-def get_all_users() -> List[sqlite3.Row]:
-    return _execute_query("SELECT user_id, has_access FROM users", fetch='all') or []
+def remove_admin(user_id: int):
+    """Удаляет администратора"""
+    data = load_data()
+    user_id_str = str(user_id)
 
+    if user_id_str in data["users"]:
+        data["users"][user_id_str]["role"] = "user"
+        save_data(data)
+
+
+def grant_access_to_all():
+    """Дает доступ всем пользователям"""
+    data = load_data()
+    for user_id, user_data in data["users"].items():
+        user_data["has_access"] = True
+    save_data(data)
+
+
+def revoke_temporary_access():
+    """Отзывает доступ у неоплативших пользователей"""
+    data = load_data()
+    for user_id, user_data in data["users"].items():
+        if user_data.get("role") != "admin":
+            user_data["has_access"] = False
+            user_data["access_until"] = None
+    save_data(data)
+
+
+# --- ФУНКЦИИ ДЛЯ СЕССИЙ ---
 
 def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
-    cursor = _execute_query(
-        "INSERT INTO sessions (user_id, name, budget, currency, creation_date) VALUES (?, ?, ?, ?, ?)",
-        (user_id, name, budget, currency, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    return cursor.lastrowid if cursor else None
+    """Добавляет новую сессию"""
+    data = load_data()
+
+    session_id = get_next_id("session_id")
+
+    data["sessions"][str(session_id)] = {
+        "id": session_id,
+        "user_id": user_id,
+        "name": name[:50],
+        "budget": budget,
+        "currency": currency,
+        "is_active": True,
+        "created_at": datetime.now().isoformat()
+    }
+
+    save_data(data)
+    return session_id
 
 
-def get_user_sessions(user_id: int) -> List[sqlite3.Row]:
-    return _execute_query(
-        "SELECT id, name, budget, currency, is_active FROM sessions WHERE user_id = ? ORDER BY is_active DESC, creation_date DESC",
-        (user_id,), fetch='all') or []
+def get_user_sessions(user_id: int) -> List[tuple]:
+    """Получает сессии пользователя"""
+    data = load_data()
+    sessions = []
+
+    for session in data["sessions"].values():
+        if session["user_id"] == user_id:
+            sessions.append((
+                session["id"],
+                session["name"],
+                session["budget"],
+                session["currency"],
+                session["is_active"]
+            ))
+
+    return sessions
 
 
 def get_session_details(session_id: int) -> Optional[Dict]:
-    session = _execute_query("SELECT * FROM sessions WHERE id = ?", (session_id,), fetch='one')
+    """Получает детали сессии с расчетами"""
+    data = load_data()
+    session = data["sessions"].get(str(session_id))
+
     if not session:
         return None
 
-    sales_data = _execute_query(
-        "SELECT SUM(amount), SUM(expense_amount), COUNT(id) FROM transactions WHERE session_id = ? AND type = 'sale'",
-        (session_id,), fetch='one')
-    total_sales = sales_data['SUM(amount)'] or 0.0
-    total_expenses_on_sales = sales_data['SUM(expense_amount)'] or 0.0
-    sales_count = sales_data['COUNT(id)'] or 0
+    # Рассчитываем статистику
+    total_sales = 0
+    total_expenses = 0
+    sales_count = 0
+    owed_to_me = 0
+    i_owe = 0
 
-    expenses_data = _execute_query(
-        "SELECT SUM(amount) FROM transactions WHERE session_id = ? AND type = 'expense'", (session_id,), fetch='one')
-    total_expenses = (expenses_data['SUM(amount)'] or 0.0) + total_expenses_on_sales
+    # Считаем транзакции
+    for trans in data["transactions"].values():
+        if trans["session_id"] == session_id:
+            if trans["type"] == "sale":
+                total_sales += trans["amount"]
+                total_expenses += trans["expense_amount"]
+                sales_count += 1
+            elif trans["type"] == "expense":
+                total_expenses += trans["amount"]
 
-    owed_to_me_data = _execute_query(
-        "SELECT SUM(amount) FROM debts WHERE session_id = ? AND type = 'owed_to_me' AND is_repaid = 0",
-        (session_id,), fetch='one')
-    owed_to_me = owed_to_me_data['SUM(amount)'] or 0.0
-
-    i_owe_data = _execute_query(
-        "SELECT SUM(amount) FROM debts WHERE session_id = ? AND type = 'i_owe' AND is_repaid = 0",
-        (session_id,), fetch='one')
-    i_owe = i_owe_data['SUM(amount)'] or 0.0
+    # Считаем долги
+    for debt in data["debts"].values():
+        if debt["session_id"] == session_id and not debt.get("is_repaid", False):
+            if debt["type"] == "owed_to_me":
+                owed_to_me += debt["amount"]
+            elif debt["type"] == "i_owe":
+                i_owe += debt["amount"]
 
     balance = total_sales - total_expenses
 
     return {
-        "name": session['name'], "budget": session['budget'], "currency": session['currency'],
-        "is_active": bool(session['is_active']), "total_sales": total_sales, "sales_count": sales_count,
-        "total_expenses": total_expenses, "balance": balance, "owed_to_me": owed_to_me, "i_owe": i_owe
+        "id": session["id"],
+        "name": session["name"],
+        "budget": session["budget"],
+        "currency": session["currency"],
+        "is_active": session["is_active"],
+        "total_sales": total_sales,
+        "total_expenses": total_expenses,
+        "sales_count": sales_count,
+        "owed_to_me": owed_to_me,
+        "i_owe": i_owe,
+        "balance": balance
     }
 
 
-def close_session(session_id: int) -> None:
-    _execute_query("UPDATE sessions SET is_active = 0 WHERE id = ?", (session_id,))
-    logger.info(f"Сессия {session_id} закрыта.")
+def close_session(session_id: int):
+    """Закрывает сессию"""
+    data = load_data()
+    session = data["sessions"].get(str(session_id))
+
+    if session:
+        session["is_active"] = False
+        session["closed_at"] = datetime.now().isoformat()
+        save_data(data)
 
 
-def add_transaction(session_id: int, t_type: str, amount: float, expense_amount: float, description: str) -> int:
-    cursor = _execute_query(
-        "INSERT INTO transactions (session_id, type, amount, expense_amount, description, date) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, t_type, amount, expense_amount, description, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    return cursor.lastrowid if cursor else None
+# --- ФУНКЦИИ ДЛЯ ТРАНЗАКЦИЙ ---
+
+def add_transaction(session_id: int, trans_type: str, amount: float,
+                    expense_amount: float = 0, description: str = "") -> int:
+    """Добавляет транзакцию (продажу или затрату)"""
+    data = load_data()
+
+    transaction_id = get_next_id("transaction_id")
+
+    data["transactions"][str(transaction_id)] = {
+        "id": transaction_id,
+        "session_id": session_id,
+        "type": trans_type,
+        "amount": amount,
+        "expense_amount": expense_amount if trans_type == "sale" else 0,
+        "description": description[:100],
+        "date": datetime.now().isoformat()
+    }
+
+    save_data(data)
+    return transaction_id
 
 
-def get_transaction_by_id(trans_id: int) -> Optional[sqlite3.Row]:
-    return _execute_query("SELECT * FROM transactions WHERE id = ?", (trans_id,), fetch='one')
+def get_transactions_list(session_id: int, trans_type: str,
+                          search_query: str = None) -> List[Dict]:
+    """Получает список транзакций с фильтрацией"""
+    data = load_data()
+    transactions = []
+
+    for trans in data["transactions"].values():
+        if trans["session_id"] == session_id and trans["type"] == trans_type:
+            # Фильтр по поиску
+            if search_query:
+                if search_query.lower() not in trans["description"].lower():
+                    continue
+
+            # Форматируем дату
+            try:
+                trans_date = datetime.fromisoformat(trans["date"])
+                formatted_date = trans_date.strftime("%d.%m.%Y %H:%M")
+            except:
+                formatted_date = trans["date"]
+
+            transactions.append({
+                "id": trans["id"],
+                "description": trans["description"],
+                "amount": trans["amount"],
+                "expense_amount": trans.get("expense_amount", 0),
+                "date": formatted_date
+            })
+
+    # Сортируем по дате (новые сначала)
+    transactions.sort(key=lambda x: x["date"], reverse=True)
+    return transactions
 
 
-def update_transaction(trans_id: int, field: str, value: Any) -> None:
-    if field not in ['amount', 'expense_amount', 'description']:
-        raise ValueError("Invalid field for update")
-    _execute_query(f"UPDATE transactions SET {field} = ? WHERE id = ?", (value, trans_id))
-    logger.info(f"Транзакция {trans_id} обновлена. Поле {field} = {value}")
+def update_transaction(trans_id: int, field: str, value: Any):
+    """Обновляет поле транзакции"""
+    data = load_data()
+    trans = data["transactions"].get(str(trans_id))
+
+    if trans:
+        trans[field] = value
+        trans["updated_at"] = datetime.now().isoformat()
+        save_data(data)
 
 
-def delete_transaction(transaction_id: int) -> None:
-    _execute_query("DELETE FROM transactions WHERE id = ?", (transaction_id,))
-    logger.info(f"Транзакция {transaction_id} удалена.")
+def delete_transaction(trans_id: int):
+    """Удаляет транзакцию"""
+    data = load_data()
+    if str(trans_id) in data["transactions"]:
+        del data["transactions"][str(trans_id)]
+        save_data(data)
 
 
-def add_debt(session_id: int, debt_type: str, person_name: str, amount: float, description: str) -> int:
-    cursor = _execute_query(
-        "INSERT INTO debts (session_id, type, person_name, amount, description, date) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, debt_type, person_name, amount, description, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    return cursor.lastrowid if cursor else None
+# --- ФУНКЦИИ ДЛЯ ДОЛГОВ ---
+
+def add_debt(session_id: int, debt_type: str, person_name: str,
+             amount: float, description: str = "") -> int:
+    """Добавляет долг"""
+    data = load_data()
+
+    debt_id = get_next_id("debt_id")
+
+    data["debts"][str(debt_id)] = {
+        "id": debt_id,
+        "session_id": session_id,
+        "type": debt_type,
+        "person_name": person_name[:50],
+        "amount": amount,
+        "description": description[:100],
+        "is_repaid": False,
+        "created_at": datetime.now().isoformat()
+    }
+
+    save_data(data)
+    return debt_id
 
 
-def get_debt_by_id(debt_id: int) -> Optional[sqlite3.Row]:
-    return _execute_query("SELECT * FROM debts WHERE id = ?", (debt_id,), fetch='one')
+def get_debts_list(session_id: int, debt_type: str,
+                   search_query: str = None) -> List[Dict]:
+    """Получает список долгов"""
+    data = load_data()
+    debts = []
+
+    for debt in data["debts"].values():
+        if debt["session_id"] == session_id and debt["type"] == debt_type:
+            # Фильтр по поиску
+            if search_query:
+                if (search_query.lower() not in debt["person_name"].lower() and
+                        search_query.lower() not in debt["description"].lower()):
+                    continue
+
+            # Форматируем дату
+            try:
+                debt_date = datetime.fromisoformat(debt["created_at"])
+                formatted_date = debt_date.strftime("%d.%m.%Y %H:%M")
+            except:
+                formatted_date = debt["created_at"]
+
+            debts.append({
+                "id": debt["id"],
+                "person_name": debt["person_name"],
+                "description": debt["description"],
+                "amount": debt["amount"],
+                "date": formatted_date,
+                "is_repaid": debt.get("is_repaid", False)
+            })
+
+    # Сортируем по дате (новые сначала)
+    debts.sort(key=lambda x: x["date"], reverse=True)
+    return debts
 
 
-def update_debt(debt_id: int, field: str, value: Any) -> None:
-    if field not in ['amount', 'person_name', 'description', 'is_repaid']:
-        raise ValueError("Invalid field for update")
-    _execute_query(f"UPDATE debts SET {field} = ? WHERE id = ?", (value, debt_id))
-    logger.info(f"Долг {debt_id} обновлен. Поле {field} = {value}")
+def update_debt(debt_id: int, field: str, value: Any):
+    """Обновляет поле долга"""
+    data = load_data()
+    debt = data["debts"].get(str(debt_id))
+
+    if debt:
+        if field == "is_repaid" and value == 1:
+            debt["is_repaid"] = True
+            debt["repaid_at"] = datetime.now().isoformat()
+        else:
+            debt[field] = value
+        debt["updated_at"] = datetime.now().isoformat()
+        save_data(data)
 
 
-def delete_debt(debt_id: int) -> None:
-    _execute_query("DELETE FROM debts WHERE id = ?", (debt_id,))
-    logger.info(f"Долг {debt_id} удален.")
+def delete_debt(debt_id: int):
+    """Удаляет долг"""
+    data = load_data()
+    if str(debt_id) in data["debts"]:
+        del data["debts"][str(debt_id)]
+        save_data(data)
 
 
-def get_transactions_list(session_id: int, t_type: str, search_query: str = None) -> List[sqlite3.Row]:
-    query = "SELECT * FROM transactions WHERE session_id = ? AND type = ?"
-    params = [session_id, t_type]
-    if search_query:
-        query += " AND description LIKE ?"
-        params.append(f"%{search_query}%")
-    query += " ORDER BY date DESC"
-    return _execute_query(query, tuple(params), fetch='all') or []
+# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ---
 
+def init_db():
+    """Инициализирует базу данных"""
+    data = load_data()
 
-def get_debts_list(session_id: int, debt_type: str, search_query: str = None) -> List[sqlite3.Row]:
-    query = "SELECT * FROM debts WHERE session_id = ? AND type = ? AND is_repaid = 0"
-    params = [session_id, debt_type]
-    if search_query:
-        query += " AND (person_name LIKE ? OR description LIKE ?)"
-        params.extend([f"%{search_query}%", f"%{search_query}%"])
-    query += " ORDER BY date DESC"
-    return _execute_query(query, tuple(params), fetch='all') or []
+    # Создаем главного админа если нет
+    admin_id = 8382571809  # Ваш ID
+    admin_id_str = str(admin_id)
 
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ АДМИН-ПАНЕЛИ ---
-
-def grant_access_to_all():
-    """Открывает доступ всем пользователям, у которых его не было."""
-    _execute_query("UPDATE users SET has_access = 1 WHERE has_access = 0")
-    logger.info("Администратор открыл доступ для всех пользователей.")
-
-def revoke_temporary_access():
-    """Закрывает доступ всем пользователям с бессрочным доступом."""
-    _execute_query("UPDATE users SET has_access = 0, access_until = NULL WHERE has_access = 1 AND access_until IS NULL")
-    logger.info("Администратор закрыл бессрочный доступ.")
+    if admin_id_str not in data["users"]:
+        data["users"][admin_id_str] = {
+            "user_id": admin_id,
+            "role": "admin",
+            "has_access": True,
+            "access_until": None,
+            "created_at": datetime.now().isoformat()
+        }
+        save_data(data)
+        print("База данных инициализирована, главный админ создан")
+    else:
+        print("База данных загружена")

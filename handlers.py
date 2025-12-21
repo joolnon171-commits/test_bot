@@ -3,6 +3,7 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
@@ -330,7 +331,8 @@ async def debt_category_handler(callback: CallbackQuery, state: FSMContext):
 async def process_sale_amount(message: Message, state: FSMContext):
     try:
         amount = float(message.text.replace(',', '.'))
-        if amount <= 0: raise ValueError
+        if amount <= 0:
+            raise ValueError
     except ValueError:
         return await message.answer("Введите корректную сумму.", reply_markup=get_cancel_inline())
     await state.update_data(amount=amount)
@@ -341,7 +343,8 @@ async def process_sale_amount(message: Message, state: FSMContext):
 async def process_sale_expense(message: Message, state: FSMContext):
     try:
         expense = float(message.text.replace(',', '.'))
-        if expense < 0: raise ValueError
+        if expense < 0:
+            raise ValueError
     except ValueError:
         return await message.answer("Введите корректную сумму (0 или больше).", reply_markup=get_cancel_inline())
     await state.update_data(expense=expense)
@@ -352,33 +355,20 @@ async def process_sale_expense(message: Message, state: FSMContext):
 async def process_sale_description(message: Message, state: FSMContext):
     data = await state.get_data()
     session_id = data.get('current_session_id')
-    add_transaction(session_id, 'sale', data['amount'], data['expense'], message.text[:100])
 
-    await state.update_data(current_session_id=session_id)
-    details = get_session_details(session_id)
-    if not details:
-        text = "Ошибка: сессия не найдена."
-        reply_markup = get_main_menu_inline([], get_user_role(message.from_user.id) == 'admin')
-        await message.answer(text, reply_markup=reply_markup)
+    if not session_id:
+        await show_main_menu(message, state, "Ошибка: сессия не найдена.")
         return
 
-    status_text = "" if details['is_active'] else "\n\n<b>Сессия закрыта. Редактирование невозможно.</b>"
-    menu_text = (
-        f"📊 <b>Меню сессии: {details['name']}</b>{status_text}\n\n"
-        f"💰 Баланс: <b>{details['balance']:.2f} {details['currency']}</b>\n"
-        f"💸 Затраты: <b>{details['total_expenses']:.2f} {details['currency']}</b>\n"
-        f"🔢 Продаж: <b>{details['sales_count']}</b>\n"
-        f"💵 Мне должны: <b>{details['owed_to_me']:.2f} {details['currency']}</b>\n"
-        f"🪙 Я должен: <b>{details['i_owe']:.2f} {details['currency']}</b>"
-    )
-
-    await message.answer(menu_text, reply_markup=get_session_menu_inline(details['is_active']))
+    add_transaction(session_id, 'sale', data['amount'], data['expense'], message.text[:100])
+    await show_session_menu(message, state, session_id)
 
 
 async def process_expense_amount(message: Message, state: FSMContext):
     try:
         amount = float(message.text.replace(',', '.'))
-        if amount <= 0: raise ValueError
+        if amount <= 0:
+            raise ValueError
     except ValueError:
         return await message.answer("Введите корректную сумму.", reply_markup=get_cancel_inline())
     await state.update_data(amount=amount)
@@ -389,33 +379,20 @@ async def process_expense_amount(message: Message, state: FSMContext):
 async def process_expense_description(message: Message, state: FSMContext):
     data = await state.get_data()
     session_id = data.get('current_session_id')
-    add_transaction(session_id, 'expense', data['amount'], 0, message.text[:100])
 
-    await state.update_data(current_session_id=session_id)
-    details = get_session_details(session_id)
-    if not details:
-        text = "Ошибка: сессия не найдена."
-        reply_markup = get_main_menu_inline([], get_user_role(message.from_user.id) == 'admin')
-        await message.answer(text, reply_markup=reply_markup)
+    if not session_id:
+        await show_main_menu(message, state, "Ошибка: сессия не найдена.")
         return
 
-    status_text = "" if details['is_active'] else "\n\n<b>Сессия закрыта. Редактирование невозможно.</b>"
-    menu_text = (
-        f"📊 <b>Меню сессии: {details['name']}</b>{status_text}\n\n"
-        f"💰 Баланс: <b>{details['balance']:.2f} {details['currency']}</b>\n"
-        f"💸 Затраты: <b>{details['total_expenses']:.2f} {details['currency']}</b>\n"
-        f"🔢 Продаж: <b>{details['sales_count']}</b>\n"
-        f"💵 Мне должны: <b>{details['owed_to_me']:.2f} {details['currency']}</b>\n"
-        f"🪙 Я должен: <b>{details['i_owe']:.2f} {details['currency']}</b>"
-    )
-
-    await message.answer(menu_text, reply_markup=get_session_menu_inline(details['is_active']))
+    add_transaction(session_id, 'expense', data['amount'], 0, message.text[:100])
+    await show_session_menu(message, state, session_id)
 
 
 async def process_debt_amount(message: Message, state: FSMContext):
     try:
         amount = float(message.text.replace(',', '.'))
-        if amount <= 0: raise ValueError
+        if amount <= 0:
+            raise ValueError
     except ValueError:
         return await message.answer("Введите корректную сумму.", reply_markup=get_cancel_inline())
     await state.update_data(amount=amount)
@@ -432,28 +409,14 @@ async def process_debt_person_name(message: Message, state: FSMContext):
 async def process_debt_description(message: Message, state: FSMContext):
     data = await state.get_data()
     session_id = data.get('current_session_id')
-    description = "" if message.text == "/skip" else message.text[:100]
-    add_debt(session_id, data['debt_type'], data['person_name'], data['amount'], description)
 
-    await state.update_data(current_session_id=session_id)
-    details = get_session_details(session_id)
-    if not details:
-        text = "Ошибка: сессия не найдена."
-        reply_markup = get_main_menu_inline([], get_user_role(message.from_user.id) == 'admin')
-        await message.answer(text, reply_markup=reply_markup)
+    if not session_id:
+        await show_main_menu(message, state, "Ошибка: сессия не найдена.")
         return
 
-    status_text = "" if details['is_active'] else "\n\n<b>Сессия закрыта. Редактирование невозможно.</b>"
-    menu_text = (
-        f"📊 <b>Меню сессии: {details['name']}</b>{status_text}\n\n"
-        f"💰 Баланс: <b>{details['balance']:.2f} {details['currency']}</b>\n"
-        f"💸 Затраты: <b>{details['total_expenses']:.2f} {details['currency']}</b>\n"
-        f"🔢 Продаж: <b>{details['sales_count']}</b>\n"
-        f"💵 Мне должны: <b>{details['owed_to_me']:.2f} {details['currency']}</b>\n"
-        f"🪙 Я должен: <b>{details['i_owe']:.2f} {details['currency']}</b>"
-    )
-
-    await message.answer(menu_text, reply_markup=get_session_menu_inline(details['is_active']))
+    description = "" if message.text == "/skip" else message.text[:100]
+    add_debt(session_id, data['debt_type'], data['person_name'], data['amount'], description)
+    await show_session_menu(message, state, session_id)
 
 
 # --- ОБРАБОТЧИКИ СПИСКОВ, ПОИСКА, РЕДАКТИРОВАНИЯ И УДАЛЕНИЯ ---
@@ -461,10 +424,15 @@ async def process_debt_description(message: Message, state: FSMContext):
 async def show_transactions_list(event: types.Message | types.CallbackQuery, state: FSMContext, t_type: str,
                                  search_query: str = None):
     session_id = (await state.get_data()).get('current_session_id')
+    if not session_id:
+        await show_main_menu(event, state, "Ошибка: сессия не найдена.")
+        return
+
     items = get_transactions_list(session_id, t_type, search_query)
     if not items:
         text = f"{'Продаж' if t_type == 'sale' else 'Затрат'} пока нет."
-        if search_query: text = f"По запросу '{search_query}' ничего не найдено."
+        if search_query:
+            text = f"По запросу '{search_query}' ничего не найдено."
         reply_markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔍 Поиск", callback_data=f"search_{t_type}")],
             [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="session_menu")]
@@ -481,7 +449,8 @@ async def show_transactions_list(event: types.Message | types.CallbackQuery, sta
 
     text = f"{'📈 Мои продажи' if t_type == 'sale' else '📉 Мои затраты'}:\n\n"
     for item in items:
-        text += f"• {item['description'] or 'Без описания'} | +{item['amount']:.2f} / -{item['expense_amount']:.2f} | {item['date']}\n"
+        expense_text = f" / -{item['expense_amount']:.2f}" if item.get('expense_amount', 0) > 0 else ""
+        text += f"• {item['description'] or 'Без описания'} | +{item['amount']:.2f}{expense_text} | {item['date']}\n"
 
     if isinstance(event, CallbackQuery):
         try:
@@ -499,12 +468,17 @@ async def show_transactions_list(event: types.Message | types.CallbackQuery, sta
 async def show_debts_list(event: types.Message | types.CallbackQuery, state: FSMContext, debt_type: str,
                           search_query: str = None):
     session_id = (await state.get_data()).get('current_session_id')
+    if not session_id:
+        await show_main_menu(event, state, "Ошибка: сессия не найдена.")
+        return
+
     items = get_debts_list(session_id, debt_type, search_query)
     if not items:
         text = f"{'Долгов вам' if debt_type == 'owed_to_me' else 'Ваших долгов'} пока нет."
-        if search_query: text = f"По запросу '{search_query}' ничего не найдено."
+        if search_query:
+            text = f"По запросу '{search_query}' ничего не найдено."
         reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔍 Поиск", callback_data=f"search_debt")],
+            [InlineKeyboardButton(text="🔍 Поиск", callback_data="search_debt")],
             [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="session_menu")]
         ])
         if isinstance(event, CallbackQuery):
@@ -519,7 +493,9 @@ async def show_debts_list(event: types.Message | types.CallbackQuery, state: FSM
 
     text = f"{'💵 Мне должны' if debt_type == 'owed_to_me' else '🪙 Я должен'}:\n\n"
     for item in items:
-        text += f"• {item['person_name']} - {item['amount']:.2f} | {item['date']}\n"
+        status = " ✅" if item.get('is_repaid') else ""
+        desc_text = f" - {item['description']}" if item.get('description') else ""
+        text += f"• {item['person_name']}{desc_text} | {item['amount']:.2f} | {item['date']}{status}\n"
 
     if isinstance(event, CallbackQuery):
         try:
@@ -534,39 +510,60 @@ async def show_debts_list(event: types.Message | types.CallbackQuery, state: FSM
 
 
 async def handle_search(callback: CallbackQuery, state: FSMContext):
-    item_type = callback.data.split('_', 1)[1]
-    await state.update_data(search_type=item_type)
-    try:
-        await callback.message.edit_text("Введите текст для поиска:", reply_markup=get_search_inline(item_type))
-    except Exception as e:
-        logger.error(f"Ошибка при редактировании сообщения: {e}")
-        await callback.bot.send_message(callback.from_user.id, "Введите текст для поиска:",
-                                        reply_markup=get_search_inline(item_type))
+    if callback.data == "search_debt":
+        await state.update_data(search_type='debt')
+        try:
+            await callback.message.edit_text("Введите текст для поиска:", reply_markup=get_search_inline('debt'))
+        except Exception as e:
+            logger.error(f"Ошибка при редактировании сообщения: {e}")
+            await callback.bot.send_message(callback.from_user.id, "Введите текст для поиска:",
+                                            reply_markup=get_search_inline('debt'))
+    else:
+        t_type = callback.data.split('_', 1)[1]
+        await state.update_data(search_type='transaction', transaction_type=t_type)
+        try:
+            await callback.message.edit_text("Введите текст для поиска:", reply_markup=get_search_inline(t_type))
+        except Exception as e:
+            logger.error(f"Ошибка при редактировании сообщения: {e}")
+            await callback.bot.send_message(callback.from_user.id, "Введите текст для поиска:",
+                                            reply_markup=get_search_inline(t_type))
     await state.set_state(AddDebt.description)
+    await callback.answer()
 
 
 async def process_search(message: Message, state: FSMContext):
     data = await state.get_data()
     search_type = data.get('search_type')
     search_query = message.text
-    if not search_type: return
+
+    if not search_type:
+        await show_main_menu(message, state)
+        return
 
     if search_type == 'transaction':
-        await show_transactions_list(message, state, 'sale', search_query)
+        t_type = data.get('transaction_type', 'sale')
+        await show_transactions_list(message, state, t_type, search_query)
     elif search_type == 'debt':
-        debt_type = data.get('debt_type')
+        debt_type = data.get('debt_type', 'owed_to_me')
         await show_debts_list(message, state, debt_type, search_query)
 
     await state.clear()
 
 
-# --- ИСПРАВЛЕННЫЕ ОБРАБОТЧИКИ РЕДАКТИРОВАНИЯ И УДАЛЕНИЯ ---
+# --- ОБРАБОТЧИКИ РЕДАКТИРОВАНИЯ И УДАЛЕНИЯ ---
 
 async def handle_edit_init(callback: CallbackQuery, state: FSMContext):
-    # Фильтр гарантирует, что data имеет формат "edit_transaction_123" или "edit_debt_456"
     parts = callback.data.split('_')
+    if len(parts) != 3:
+        await callback.answer("Ошибка формата", show_alert=True)
+        return
+
     item_type = parts[1]  # 'transaction' или 'debt'
-    item_id = int(parts[2])
+    try:
+        item_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Ошибка: неверный ID", show_alert=True)
+        return
 
     await state.update_data(edit_item_id=item_id, edit_item_type=item_type)
     try:
@@ -580,11 +577,10 @@ async def handle_edit_init(callback: CallbackQuery, state: FSMContext):
 
 
 async def handle_edit_field(callback: CallbackQuery, state: FSMContext):
-    # Фильтр гарантирует, что data имеет формат "edit_field_transaction_123_amount"
-    # ИСПРАВЛЕНО: Используем split('_', 4) для корректной обработки полей с '_', например 'expense_amount'
-    parts = callback.data.split('_', 4)
+    # Формат: edit_field_transaction_123_amount
+    parts = callback.data.split('_')
     if len(parts) < 5:
-        logger.error(f"Неверный формат callback_data в handle_edit_field: {callback.data}")
+        logger.error(f"Неверный формат callback_data: {callback.data}")
         await callback.answer("Произошла ошибка. Попробуйте снова.", show_alert=True)
         return
 
@@ -592,11 +588,10 @@ async def handle_edit_field(callback: CallbackQuery, state: FSMContext):
     try:
         item_id = int(parts[3])
     except ValueError:
-        logger.error(f"Неверный ID элемента в callback_data: {parts[3]}")
-        await callback.answer("Произошла ошибка. Неверный ID.", show_alert=True)
+        await callback.answer("Ошибка: неверный ID", show_alert=True)
         return
 
-    field = parts[4]  # 'amount', 'expense_amount', 'description', и т.д.
+    field = '_'.join(parts[4:])  # Может быть 'amount', 'expense_amount', 'description', 'person_name'
 
     await state.update_data(edit_item_id=item_id, edit_item_type=item_type, edit_field=field)
 
@@ -611,25 +606,33 @@ async def handle_edit_field(callback: CallbackQuery, state: FSMContext):
         'description': "Введите новое описание:",
         'person_name': "Введите новое имя:"
     }
+
+    prompt = prompt_map.get(field, "Введите новое значение:")
     try:
-        await callback.message.edit_text(prompt_map.get(field, "Введите новое значение:"),
-                                         reply_markup=get_cancel_inline())
+        await callback.message.edit_text(prompt, reply_markup=get_cancel_inline())
     except Exception as e:
         logger.error(f"Ошибка при редактировании сообщения: {e}")
-        await callback.bot.send_message(callback.from_user.id, prompt_map.get(field, "Введите новое значение:"),
-                                        reply_markup=get_cancel_inline())
+        await callback.bot.send_message(callback.from_user.id, prompt, reply_markup=get_cancel_inline())
+
     await callback.answer()
 
 
 async def process_edit_field(message: Message, state: FSMContext):
     data = await state.get_data()
-    item_type, item_id, field = data['edit_item_type'], data['edit_item_id'], data['edit_field']
+    item_type = data.get('edit_item_type')
+    item_id = data.get('edit_item_id')
+    field = data.get('edit_field')
     new_value = message.text.strip()
+
+    if not all([item_type, item_id, field]):
+        await show_main_menu(message, state, "Ошибка: данные не найдены")
+        return
 
     if field in ['amount', 'expense_amount']:
         try:
             new_value = float(new_value.replace(',', '.'))
-            if new_value < 0: raise ValueError
+            if new_value < 0:
+                raise ValueError
         except ValueError:
             return await message.answer("Введите корректное неотрицательное число.", reply_markup=get_cancel_inline())
 
@@ -639,23 +642,41 @@ async def process_edit_field(message: Message, state: FSMContext):
         update_debt(item_id, field, new_value)
 
     session_id = data.get('current_session_id')
-    await show_session_menu(message, state, session_id)
+    if session_id:
+        await show_session_menu(message, state, session_id)
+    else:
+        await show_main_menu(message, state)
 
 
 async def handle_repay_debt(callback: CallbackQuery, state: FSMContext):
-    # Фильтр гарантирует формат "repay_debt_123"
-    debt_id = int(callback.data.split('_')[2])
+    try:
+        debt_id = int(callback.data.split('_')[2])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка: неверный формат", show_alert=True)
+        return
+
     update_debt(debt_id, 'is_repaid', 1)
-    await callback.answer("Долг отмечен как погашенный.", show_alert=True)
+    await callback.answer("✅ Долг отмечен как погашенный.", show_alert=True)
+
     session_id = (await state.get_data()).get('current_session_id')
-    await show_session_menu(callback, state, session_id)
+    if session_id:
+        await show_session_menu(callback, state, session_id)
+    else:
+        await show_main_menu(callback, state)
 
 
 async def handle_delete_confirm(callback: CallbackQuery, state: FSMContext):
-    # Фильтр гарантирует, что data имеет формат "del_transaction_123_confirm" или "del_debt_456_confirm"
     parts = callback.data.split('_')
+    if len(parts) != 4:
+        await callback.answer("Ошибка формата", show_alert=True)
+        return
+
     item_type = parts[1]  # 'transaction' или 'debt'
-    item_id = int(parts[2])
+    try:
+        item_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Ошибка: неверный ID", show_alert=True)
+        return
 
     await state.update_data(delete_item_type=item_type, delete_item_id=item_id)
     try:
@@ -669,44 +690,54 @@ async def handle_delete_confirm(callback: CallbackQuery, state: FSMContext):
 
 
 async def process_confirmation(callback: CallbackQuery, state: FSMContext):
-    parts = callback.data.split('_', 3)
+    parts = callback.data.split('_')
     if len(parts) < 4:
-        logger.error(f"Неверный формат callback_data в process_confirmation: {callback.data}")
+        logger.error(f"Неверный формат callback_data: {callback.data}")
         await callback.answer("Произошла ошибка. Попробуйте снова.", show_alert=True)
         return
 
-    action = f"{parts[1]}_{parts[2]}"
-    item_id = int(parts[3])
+    action_type = parts[1]  # 'del' или 'close'
+    item_type = parts[2] if parts[1] == 'del' else 'session'
 
-    # ИСПРАВЛЕНО: Исправлена проверка для удаления транзакций. Было 'del_trans', стало 'del_transaction'
-    if action == 'del_transaction':
+    try:
+        item_id = int(parts[3])
+    except ValueError:
+        await callback.answer("Ошибка: неверный ID", show_alert=True)
+        return
+
+    if action_type == 'del' and item_type == 'transaction':
         delete_transaction(item_id)
-        await callback.answer("Транзакция удалена.", show_alert=True)
-    elif action == 'del_debt':
+        await callback.answer("✅ Транзакция удалена.", show_alert=True)
+    elif action_type == 'del' and item_type == 'debt':
         delete_debt(item_id)
-        await callback.answer("Долг удален.", show_alert=True)
-    elif action == 'close_session':
+        await callback.answer("✅ Долг удален.", show_alert=True)
+    elif action_type == 'close' and item_type == 'session':
         close_session(item_id)
         details = get_session_details(item_id)
-        reply_markup = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ В меню", callback_data=f"nav_session_{item_id}")]]
-        )
-        try:
-            await callback.message.edit_text(
-                f"🏁 Сессия '{details['name']}' завершена.\nИтоговая прибыль: {details['balance']:.2f} {details['currency']}",
-                reply_markup=reply_markup
-            )
-        except Exception as e:
-            logger.error(f"Ошибка при редактировании сообщения: {e}")
-            await callback.bot.send_message(
-                callback.from_user.id,
-                f"🏁 Сессия '{details['name']}' завершена.\nИтоговая прибыль: {details['balance']:.2f} {details['currency']}",
-                reply_markup=reply_markup
-            )
+        if details:
+            try:
+                await callback.message.edit_text(
+                    f"🏁 Сессия '{details['name']}' завершена.\nИтоговая прибыль: {details['balance']:.2f} {details['currency']}",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="⬅️ В меню", callback_data="nav_start")]
+                    ])
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при редактировании сообщения: {e}")
+                await callback.bot.send_message(
+                    callback.from_user.id,
+                    f"🏁 Сессия '{details['name']}' завершена.\nИтоговая прибыль: {details['balance']:.2f} {details['currency']}",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="⬅️ В меню", callback_data="nav_start")]
+                    ])
+                )
         return
 
     session_id = (await state.get_data()).get('current_session_id')
-    await show_session_menu(callback, state, session_id)
+    if session_id:
+        await show_session_menu(callback, state, session_id)
+    else:
+        await show_main_menu(callback, state)
 
 
 async def cancel_action(callback: CallbackQuery, state: FSMContext):
@@ -714,18 +745,31 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
 
 
 async def cancel_edit(callback: CallbackQuery, state: FSMContext):
-    item_type = callback.data.split('_', 2)[2]
+    parts = callback.data.split('_')
+    if len(parts) != 3:
+        await callback.answer("Ошибка формата", show_alert=True)
+        return
+
+    item_type = parts[2]
     if item_type == 'transaction':
         await show_transactions_list(callback, state, 'sale')
     elif item_type == 'debt':
-        debt_type = (await state.get_data()).get('debt_type')
+        debt_type = (await state.get_data()).get('debt_type', 'owed_to_me')
         await show_debts_list(callback, state, debt_type)
     await callback.answer()
 
 
 async def show_report(callback: CallbackQuery, state: FSMContext):
     session_id = (await state.get_data()).get('current_session_id')
+    if not session_id:
+        await callback.answer("Ошибка: сессия не найдена", show_alert=True)
+        return
+
     details = get_session_details(session_id)
+    if not details:
+        await callback.answer("Ошибка: детали сессии не найдены", show_alert=True)
+        return
+
     report_text = (
         f"📊 <b>Отчет по сессии: {details['name']}</b>\n\n"
         f"💰 Общий доход: <b>{details['total_sales']:.2f} {details['currency']}</b>\n"
@@ -748,6 +792,7 @@ async def show_report(callback: CallbackQuery, state: FSMContext):
 
 async def admin_panel_handler(callback: CallbackQuery, state: FSMContext):
     action = callback.data.split('_', 1)[1]
+
     if action == "access":
         try:
             await callback.message.edit_text("Управление доступом:", reply_markup=get_access_management_inline())
@@ -837,17 +882,22 @@ async def admin_panel_handler(callback: CallbackQuery, state: FSMContext):
             await callback.bot.send_message(callback.from_user.id, "Введите текст для рассылки.",
                                             reply_markup=get_cancel_inline())
         await state.set_state(AdminBroadcast.text)
+
     await callback.answer()
 
 
 async def process_open_user_access(message: Message, state: FSMContext):
     try:
         parts = message.text.split()
+        if len(parts) != 2:
+            raise ValueError
+
         user_id, days = int(parts[0]), int(parts[1])
         update_user_access(user_id, True, days)
         await message.answer(f"✅ Пользователю {user_id} открыт доступ на {days} дней.")
     except (ValueError, IndexError):
         await message.answer("❌ Неверный формат. Используйте: <code>ID ДНИ</code>")
+
     await state.clear()
     await show_main_menu(message, state)
 
@@ -859,6 +909,7 @@ async def process_close_user_access(message: Message, state: FSMContext):
         await message.answer(f"✅ Пользователю {user_id} закрыт доступ.")
     except ValueError:
         await message.answer("❌ Неверный формат. Введите только ID пользователя.")
+
     await state.clear()
     await show_main_menu(message, state)
 
@@ -870,6 +921,7 @@ async def process_add_admin(message: Message, state: FSMContext):
         await message.answer(f"✅ Пользователь {user_id} теперь администратор.")
     except ValueError:
         await message.answer("❌ Неверный формат. Введите только ID пользователя.")
+
     await state.clear()
     await show_main_menu(message, state)
 
@@ -883,6 +935,7 @@ async def process_remove_admin(message: Message, state: FSMContext):
         await message.answer(f"✅ Пользователь {user_id} больше не администратор.")
     except ValueError:
         await message.answer("❌ Неверный формат. Введите только ID пользователя.")
+
     await state.clear()
     await show_main_menu(message, state)
 
@@ -891,6 +944,7 @@ async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
     audience = (await state.get_data()).get('audience')
     users_to_send = []
     all_users = get_all_users()
+
     if audience == "all":
         users_to_send = [u['user_id'] for u in all_users]
     elif audience == "access":
@@ -912,7 +966,7 @@ async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
     await show_main_menu(message, state)
 
 
-# --- РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ (ИСПРАВЛЕНО) ---
+# --- РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ---
 def register_handlers(dp: Dispatcher):
     """Регистрирует все обработчики в диспетчере."""
 
@@ -945,7 +999,7 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(handle_search, F.data.startswith("search_"))
     dp.message.register(process_search, F.text, AddDebt.description)
 
-    # ИСПРАВЛЕНО: Более конкретные фильтры для избежания конфликтов
+    # Редактирование и удаление
     dp.callback_query.register(handle_edit_init,
                                F.data.startswith("edit_transaction_") | F.data.startswith("edit_debt_"))
     dp.callback_query.register(handle_edit_field, F.data.startswith("edit_field_"))

@@ -1,5 +1,4 @@
 # main.py
-
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
@@ -10,26 +9,32 @@ from db import init_db
 from handlers import register_handlers, AccessMiddleware, FSMTimeoutMiddleware
 
 # --- НАСТРОЙКИ ---
-BOT_TOKEN = "8400237965:AAFfWPtwnbCeU7qaun5Iy4jeIwC_bLDgdeE"  # ЗАМЕНИТЕ НА ВАШ ТОКЕН
+BOT_TOKEN = "8400237965:AAFfWPtwnbCeU7qaun5Iy4jeIwC_bLDgdeE"  # Ваш токен
+JSONBIN_API_KEY = "ВАШ_API_КЛЮЧ_JSONBIN"  # Замените на ваш
+MASTER_BIN_ID = "ВАШ_MASTER_BIN_ID"  # Замените на ваш
 
 # --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 
-# --- ЗАПУСК ---
 async def main():
     # Инициализация БД
     init_db()
 
     # Инициализация бота и диспетчера
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     dp = Dispatcher()
 
     # Регистрация всех обработчиков
     register_handlers(dp)
 
     # Подключение middleware
-    # Порядок важен: сначала проверка доступа, потом таймаут
     dp.message.middleware(AccessMiddleware(bot))
     dp.callback_query.middleware(AccessMiddleware(bot))
     dp.message.middleware(FSMTimeoutMiddleware())
