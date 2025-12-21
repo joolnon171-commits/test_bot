@@ -2,6 +2,8 @@
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardMarkup
 from aiogram.types import InlineKeyboardButton
+from db import load_data
+
 
 # --- ГЛАВНОЕ МЕНЮ И НАВИГАЦИЯ ---
 
@@ -100,9 +102,11 @@ def get_debt_management_inline() -> InlineKeyboardMarkup:
     builder.adjust(2)
     return builder.as_markup()
 
+
 # --- СПИСКИ И ДЕЙСТВИЯ ---
 
-def get_items_list_inline(items: list, item_type: str, session_id: int, search_query: str = None) -> InlineKeyboardMarkup:
+def get_items_list_inline(items: list, item_type: str, session_id: int,
+                          search_query: str = None) -> InlineKeyboardMarkup:
     """
     Генерирует клавиатуру для списков (транзакции, долги).
     :param items: Список объектов (строк из БД)
@@ -130,9 +134,14 @@ def get_items_list_inline(items: list, item_type: str, session_id: int, search_q
 
 
 def get_search_inline(item_type: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_search_{item_type}")]
-    ])
+    if item_type == 'debt':
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_search_debt")]
+        ])
+    else:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_search_{item_type}")]
+        ])
 
 
 def get_confirmation_inline(action: str, item_id: int) -> InlineKeyboardMarkup:
@@ -145,21 +154,62 @@ def get_confirmation_inline(action: str, item_id: int) -> InlineKeyboardMarkup:
     builder.adjust(2)
     return builder.as_markup()
 
+
 def get_edit_item_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для редактирования элемента"""
     builder = InlineKeyboardBuilder()
+
     if item_type == 'transaction':
-        builder.add(InlineKeyboardButton(text="Сумма", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
-        builder.add(InlineKeyboardButton(text="Затраты", callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"))
-        builder.add(InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
+        # Узнаем тип транзакции (sale или expense)
+        data = load_data()
+        trans = data.get("transactions", {}).get(str(item_id))
+
+        if trans:
+            trans_type = trans.get("type", "sale")
+
+            if trans_type == "sale":
+                # Для продаж: сумма, затраты, описание
+                builder.add(InlineKeyboardButton(text="Сумма продажи",
+                                                 callback_data=f"edit_field_{item_type}_{item_id}_amount"))
+                builder.add(InlineKeyboardButton(text="Затраты",
+                                                 callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"))
+                builder.add(InlineKeyboardButton(text="Описание",
+                                                 callback_data=f"edit_field_{item_type}_{item_id}_description"))
+            elif trans_type == "expense":
+                # Для затрат: только сумма и описание (без затрат)
+                builder.add(
+                    InlineKeyboardButton(text="Сумма затрат", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
+                builder.add(InlineKeyboardButton(text="Описание",
+                                                 callback_data=f"edit_field_{item_type}_{item_id}_description"))
+        else:
+            # Если не удалось определить тип, показываем общие кнопки
+            builder.add(InlineKeyboardButton(text="Сумма", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
+            builder.add(
+                InlineKeyboardButton(text="Затраты", callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"))
+            builder.add(
+                InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
+
     elif item_type == 'debt':
         builder.add(InlineKeyboardButton(text="Сумма", callback_data=f"edit_field_{item_type}_{item_id}_amount"))
         builder.add(InlineKeyboardButton(text="Имя", callback_data=f"edit_field_{item_type}_{item_id}_person_name"))
-        builder.add(InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
+        builder.add(
+            InlineKeyboardButton(text="Описание", callback_data=f"edit_field_{item_type}_{item_id}_description"))
         builder.add(InlineKeyboardButton(text="Погашен", callback_data=f"repay_debt_{item_id}"))
 
     builder.add(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cancel_edit_{item_type}"))
-    builder.adjust(2)
+
+    # Настраиваем количество кнопок в ряду
+    if item_type == 'transaction':
+        # Проверяем тип транзакции для правильного расположения кнопок
+        if 'data' in locals() and trans and trans.get("type") == "expense":
+            builder.adjust(2, 1)  # 2 кнопки в первом ряду, 1 во втором
+        else:
+            builder.adjust(2, 1, 1)  # 2 кнопки в первом ряду, 1 во втором, 1 в третьем
+    else:
+        builder.adjust(2, 2, 1)  # Для долгов: 2, 2, 1
+
     return builder.as_markup()
+
 
 def get_currency_inline() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
