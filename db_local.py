@@ -1,4 +1,4 @@
-# db_local.py - ЛОКАЛЬНАЯ БАЗА БЕЗ КЭША
+# db_local.py - ИСПРАВЛЕННАЯ ВЕРСИЯ ДЛЯ СЕССИЙ
 
 import json
 import os
@@ -12,18 +12,20 @@ logger = logging.getLogger(__name__)
 DB_FILE = "bot_data.json"
 
 
-# --- ПРОСТОЕ ХРАНЕНИЕ БЕЗ КЭША ---
+# --- ОСНОВНЫЕ ФУНКЦИИ ---
 
 def load_data() -> dict:
-    """Загружает данные из локального файла - БЕЗ КЭША"""
+    """Загружает данные из локального файла"""
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                logger.debug(f"📥 Данные загружены из {DB_FILE}")
+                return data
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки файла: {e}")
+            logger.error(f"❌ Ошибка загрузки: {e}")
 
-    # Создаем базовую структуру
+    # Создаем новую базу
     return _create_empty_structure()
 
 
@@ -32,6 +34,7 @@ def save_data(data: dict) -> bool:
     try:
         with open(DB_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        logger.debug(f"💾 Данные сохранены в {DB_FILE}")
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения: {e}")
@@ -61,87 +64,45 @@ def _create_empty_structure() -> dict:
     }
 
 
-# --- ФУНКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ---
+# --- ФУНКЦИИ ДЛЯ СЕССИЙ (КОМПЛЕТНО ИСПРАВЛЕННЫЕ) ---
 
-def ensure_user_exists(user_id: int):
-    """Создает пользователя если не существует"""
+def _get_next_session_id() -> int:
+    """Получает следующий ID для сессии"""
     data = load_data()
-    user_id_str = str(user_id)
-
-    if user_id_str not in data["users"]:
-        data["users"][user_id_str] = {
-            "user_id": user_id,
-            "role": "user",
-            "has_access": False,
-            "access_until": None,
-            "created_at": datetime.now().isoformat()
-        }
-        save_data(data)
-
-
-def get_user_role(user_id: int) -> str:
-    """Получает роль пользователя"""
-    # Главный админ
-    if user_id == 8382571809:
-        return "admin"
-
-    data = load_data()
-    user = data.get("users", {}).get(str(user_id))
-    return user.get("role", "user") if user else "user"
-
-
-def check_user_access(user_id: int) -> bool:
-    """Проверяет доступ пользователя"""
-    # Главный админ всегда имеет доступ
-    if user_id == 8382571809:
-        return True
-
-    data = load_data()
-    user = data.get("users", {}).get(str(user_id))
-
-    if not user:
-        return False
-
-    if user.get("role") == "admin":
-        return True
-
-    if not user.get("has_access", False):
-        return False
-
-    # Проверяем срок доступа
-    access_until = user.get("access_until")
-    if access_until:
-        try:
-            until_date = datetime.fromisoformat(access_until)
-            if datetime.now() > until_date:
-                # Срок истек
-                user["has_access"] = False
-                user["access_until"] = None
-                save_data(data)
-                return False
-        except:
-            pass
-
-    return user.get("has_access", False)
-
-
-# --- ФУНКЦИИ ДЛЯ СЕССИЙ (ИСПРАВЛЕННЫЕ) ---
-
-def get_next_id(counter_name: str) -> int:
-    """Получает следующий ID"""
-    data = load_data()
-    data["counters"][counter_name] += 1
+    next_id = data["counters"]["session_id"] + 1
+    data["counters"]["session_id"] = next_id
     save_data(data)
-    return data["counters"][counter_name]
+    logger.info(f"📊 Новый ID сессии: {next_id}")
+    return next_id
+
+
+def _get_next_transaction_id() -> int:
+    """Получает следующий ID для транзакции"""
+    data = load_data()
+    next_id = data["counters"]["transaction_id"] + 1
+    data["counters"]["transaction_id"] = next_id
+    save_data(data)
+    return next_id
+
+
+def _get_next_debt_id() -> int:
+    """Получает следующий ID для долга"""
+    data = load_data()
+    next_id = data["counters"]["debt_id"] + 1
+    data["counters"]["debt_id"] = next_id
+    save_data(data)
+    return next_id
 
 
 def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
-    """Добавляет новую сессию - ВСЕГДА СВЕЖИЕ ДАННЫЕ"""
+    """Добавляет новую сессию - ИСПРАВЛЕННАЯ"""
     data = load_data()
 
-    session_id = get_next_id("session_id")
+    # Получаем новый уникальный ID
+    session_id = _get_next_session_id()
 
-    data["sessions"][str(session_id)] = {
+    # Создаем новую сессию
+    new_session = {
         "id": session_id,
         "user_id": user_id,
         "name": name[:50],
@@ -151,32 +112,36 @@ def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
         "created_at": datetime.now().isoformat()
     }
 
+    # Добавляем в данные
+    data["sessions"][str(session_id)] = new_session
+
+    # Сохраняем
     if save_data(data):
         logger.info(f"✅ Сессия '{name}' создана (ID: {session_id})")
 
-        # Логируем ВСЕ сессии после создания
+        # Логируем все сессии для отладки
         all_sessions = data.get("sessions", {})
         logger.info(f"📊 Всего сессий в базе: {len(all_sessions)}")
         for sid, sess in all_sessions.items():
-            logger.info(f"   - Сессия {sid}: '{sess['name']}' (пользователь: {sess['user_id']})")
+            logger.info(
+                f"   Сессия {sid}: '{sess['name']}' (пользователь: {sess['user_id']}, активна: {sess['is_active']})")
 
         return session_id
+
+    logger.error(f"❌ Не удалось создать сессию '{name}'")
     return 0
 
 
 def get_user_sessions(user_id: int) -> List[tuple]:
-    """Получает сессии пользователя - ВСЕГДА СВЕЖИЕ ДАННЫЕ"""
+    """Получает сессии пользователя - ИСПРАВЛЕННАЯ"""
     data = load_data()
     sessions = []
 
-    logger.info(f"🔍 Поиск сессий для пользователя {user_id}")
-
     all_sessions = data.get("sessions", {})
+    logger.info(f"🔍 Поиск сессий для пользователя {user_id}")
     logger.info(f"📊 Всего сессий в базе: {len(all_sessions)}")
 
-    for session_id, session in all_sessions.items():
-        logger.info(f"   Проверяем сессию {session_id}: пользователь={session['user_id']}, имя='{session['name']}'")
-
+    for session_id_str, session in all_sessions.items():
         if session["user_id"] == user_id:
             sessions.append((
                 session["id"],
@@ -185,11 +150,12 @@ def get_user_sessions(user_id: int) -> List[tuple]:
                 session["currency"],
                 session["is_active"]
             ))
-            logger.info(f"   ✅ Добавлена сессия {session_id} для пользователя {user_id}")
+            logger.info(f"   ✅ Найдена сессия {session['id']}: '{session['name']}'")
 
     # Сортируем по ID (новые сначала)
     sessions.sort(key=lambda x: x[0], reverse=True)
     logger.info(f"📋 Для пользователя {user_id} найдено сессий: {len(sessions)}")
+
     return sessions
 
 
@@ -229,8 +195,6 @@ def get_session_details(session_id: int) -> Optional[Dict]:
 
     balance = total_sales - total_expenses
 
-    logger.info(f"📈 Статистика сессии {session_id}: продаж={sales_count}, баланс={balance}")
-
     return {
         "id": session["id"],
         "name": session["name"],
@@ -265,7 +229,7 @@ def add_transaction(session_id: int, trans_type: str, amount: float,
     """Добавляет транзакцию"""
     data = load_data()
 
-    transaction_id = get_next_id("transaction_id")
+    transaction_id = _get_next_transaction_id()
 
     data["transactions"][str(transaction_id)] = {
         "id": transaction_id,
@@ -289,12 +253,9 @@ def get_transactions_list(session_id: int, trans_type: str,
 
     for trans in data.get("transactions", {}).values():
         if trans["session_id"] == session_id and trans["type"] == trans_type:
-            # Фильтр по поиску
-            if search_query:
-                if search_query.lower() not in trans["description"].lower():
-                    continue
+            if search_query and search_query.lower() not in trans["description"].lower():
+                continue
 
-            # Форматируем дату
             try:
                 trans_date = datetime.fromisoformat(trans["date"])
                 formatted_date = trans_date.strftime("%d.%m.%Y %H:%M")
@@ -309,7 +270,6 @@ def get_transactions_list(session_id: int, trans_type: str,
                 "date": formatted_date
             })
 
-    # Сортируем по дате (новые сначала)
     transactions.sort(key=lambda x: x["date"], reverse=True)
     return transactions
 
@@ -340,7 +300,7 @@ def add_debt(session_id: int, debt_type: str, person_name: str,
     """Добавляет долг"""
     data = load_data()
 
-    debt_id = get_next_id("debt_id")
+    debt_id = _get_next_debt_id()
 
     data["debts"][str(debt_id)] = {
         "id": debt_id,
@@ -365,13 +325,11 @@ def get_debts_list(session_id: int, debt_type: str,
 
     for debt in data.get("debts", {}).values():
         if debt["session_id"] == session_id and debt["type"] == debt_type:
-            # Фильтр по поиску
             if search_query:
                 if (search_query.lower() not in debt["person_name"].lower() and
                         search_query.lower() not in debt["description"].lower()):
                     continue
 
-            # Форматируем дату
             try:
                 debt_date = datetime.fromisoformat(debt["created_at"])
                 formatted_date = debt_date.strftime("%d.%m.%Y %H:%M")
@@ -387,7 +345,6 @@ def get_debts_list(session_id: int, debt_type: str,
                 "is_repaid": debt.get("is_repaid", False)
             })
 
-    # Сортируем по дате (новые сначала)
     debts.sort(key=lambda x: x["date"], reverse=True)
     return debts
 
@@ -415,7 +372,65 @@ def delete_debt(debt_id: int):
         save_data(data)
 
 
-# --- АДМИН-ФУНКЦИИ ---
+# --- ФУНКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ---
+
+def ensure_user_exists(user_id: int):
+    """Создает пользователя если не существует"""
+    data = load_data()
+    user_id_str = str(user_id)
+
+    if user_id_str not in data["users"]:
+        data["users"][user_id_str] = {
+            "user_id": user_id,
+            "role": "user",
+            "has_access": False,
+            "access_until": None,
+            "created_at": datetime.now().isoformat()
+        }
+        save_data(data)
+
+
+def get_user_role(user_id: int) -> str:
+    """Получает роль пользователя"""
+    if user_id == 8382571809:
+        return "admin"
+
+    data = load_data()
+    user = data.get("users", {}).get(str(user_id))
+    return user.get("role", "user") if user else "user"
+
+
+def check_user_access(user_id: int) -> bool:
+    """Проверяет доступ пользователя"""
+    if user_id == 8382571809:
+        return True
+
+    data = load_data()
+    user = data.get("users", {}).get(str(user_id))
+
+    if not user:
+        return False
+
+    if user.get("role") == "admin":
+        return True
+
+    if not user.get("has_access", False):
+        return False
+
+    access_until = user.get("access_until")
+    if access_until:
+        try:
+            until_date = datetime.fromisoformat(access_until)
+            if datetime.now() > until_date:
+                user["has_access"] = False
+                user["access_until"] = None
+                save_data(data)
+                return False
+        except:
+            pass
+
+    return user.get("has_access", False)
+
 
 def update_user_access(user_id: int, grant_access: bool, days: int = 0):
     """Обновляет доступ пользователя"""
@@ -494,12 +509,10 @@ def init_db():
 
     data = load_data()
 
-    # Гарантируем что админ существует
     admin_id = 8382571809
     admin_id_str = str(admin_id)
 
     if admin_id_str not in data.get("users", {}):
-        logger.info("Создаем главного админа...")
         data.setdefault("users", {})[admin_id_str] = {
             "user_id": admin_id,
             "role": "admin",
@@ -510,5 +523,7 @@ def init_db():
         save_data(data)
         logger.info("✅ Главный админ создан")
 
+    logger.info(f"📊 Счетчик сессий: {data['counters']['session_id']}")
+    logger.info(f"📊 Всего сессий: {len(data.get('sessions', {}))}")
     logger.info("✅ Локальная база данных готова")
     return True
