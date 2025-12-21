@@ -10,8 +10,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- НАСТРОЙКИ JSONBIN.IO ---
-JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg"  # ЗАМЕНИТЕ НА ВАШ
-MASTER_BIN_ID = "694818b2d0ea881f40380c8c"  # ЗАМЕНИТЕ НА ВАШ
+MASTER_BIN_ID = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg"  # ЗАМЕНИТЕ НА ВАШ
+JSONBIN_API_KEY = "694818b2d0ea881f40380c8c"  # ЗАМЕНИТЕ НА ВАШ
 
 API_URL = "https://api.jsonbin.io/v3/b"
 HEADERS = {
@@ -25,7 +25,45 @@ _CACHE = {}
 _CACHE_TIMESTAMP = {}
 _CACHE_TTL = 3  # Кэш на 3 секунды
 
+# В начало db.py добавьте:
+EMERGENCY_ADMIN_MODE = True  # Поставьте True для принудительного включения админа
 
+
+# Исправьте check_user_access:
+def check_user_access(user_id: int) -> bool:
+    """Проверяет доступ пользователя - с аварийным режимом"""
+    if EMERGENCY_ADMIN_MODE and user_id == 8382571809:
+        print(f"⚡ АВАРИЙНЫЙ РЕЖИМ: Принудительно даем доступ админу {user_id}")
+        return True
+
+    data = load_data_cached()
+    user = data.get("users", {}).get(str(user_id))
+
+    if not user:
+        return False
+
+    # Всегда даем доступ админу
+    if user.get("role") == "admin":
+        return True
+
+    if not user.get("has_access", False):
+        return False
+
+    # Проверяем срок доступа
+    access_until = user.get("access_until")
+    if access_until:
+        try:
+            until_date = datetime.fromisoformat(access_until)
+            if datetime.now() > until_date:
+                # Срок истек
+                user["has_access"] = False
+                user["access_until"] = None
+                save_data(data)
+                return False
+        except:
+            pass
+
+    return user.get("has_access", False)
 def clear_cache(cache_key: str = None):
     """Очищает кэш полностью или для конкретного ключа"""
     global _CACHE, _CACHE_TIMESTAMP
