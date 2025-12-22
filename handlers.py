@@ -695,9 +695,16 @@ async def handle_search(callback: CallbackQuery, state: FSMContext):
     item_type = callback.data.split('_', 1)[1]
 
     if item_type == "debt":
-        await state.update_data(search_type="debt")
+        await state.update_data(
+            search_mode=True,
+            search_type="debt"
+        )
     else:  # sale или expense
-        await state.update_data(search_type="transaction", transaction_type=item_type)
+        await state.update_data(
+            search_mode=True,
+            search_type="transaction",
+            transaction_type=item_type
+        )
 
     try:
         await callback.message.edit_text("Введите текст для поиска:",
@@ -708,8 +715,6 @@ async def handle_search(callback: CallbackQuery, state: FSMContext):
                                         reply_markup=get_search_inline(item_type))
 
     await callback.answer()
-
-
 async def process_search(message: Message, state: FSMContext):
     """Обработчик поискового запроса"""
     data = await state.get_data()
@@ -717,7 +722,14 @@ async def process_search(message: Message, state: FSMContext):
     search_query = message.text.strip()
 
     if not search_type:
-        await message.answer("Ошибка поиска. Попробуйте снова.", reply_markup=get_cancel_inline())
+        # Если нет типа поиска, значит это не поиск, а описание для долга
+        # Пропускаем обработку
+        return
+
+    session_id = data.get('current_session_id')
+    if not session_id:
+        await message.answer("Ошибка: сессия не найдена.", reply_markup=get_cancel_inline())
+        await state.clear()
         return
 
     if search_type == "transaction":
@@ -728,7 +740,6 @@ async def process_search(message: Message, state: FSMContext):
         await show_debts_list(message, state, debt_type, search_query)
 
     await state.clear()
-
 
 async def handle_edit_init(callback: CallbackQuery, state: FSMContext):
     """Обработчик начала редактирования"""
@@ -1288,7 +1299,7 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(debt_category_handler, F.data.startswith("debt_"))
     dp.callback_query.register(handle_list_debts, F.data.startswith("list_debts_"))
 
-    # FSM для транзакций и долгов
+    # FSM для транзакций и долгов - ДОЛЖНЫ БЫТЬ ПЕРВЫМИ
     dp.message.register(process_sale_amount, AddSale.amount)
     dp.message.register(process_sale_expense, AddSale.expense)
     dp.message.register(process_sale_description, AddSale.description)
@@ -1298,15 +1309,51 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(process_debt_person_name, AddDebt.person_name)
     dp.message.register(process_debt_description, AddDebt.description)
 
-    # Списки, поиск, редактирование, удаление
-    dp.callback_query.register(handle_search, F.data.startswith("search_"))
-    dp.message.register(process_search, F.text)
+    # Редактирование - ТОЖЕ ВАЖНЫЙ ПРИОРИТЕТ
+    dp.message.register(process_edit_field, EditTransaction.field)
+    dp.message.register(process_edit_field, EditDebt.field)
 
+    # Поиск - НИЗКИЙ ПРИОРИТЕТ
+    dp.callback_query.register(handle_search, F.data.startswith("search_"))
+
+    # Убрали общий обработчик process_search, так как он мешает другим состояниям
+
+    # Вместо этого добавим специфический обработчик для поиска
+    # Он будет срабатывать только когда есть специальный флаг в состоянии
+    @dp.message(F.text)
+    async def handle_text_messages(message: Message, state: FSMContext):
+        """Обработчик текстовых сообщений с проверкой состояния"""
+        current_state = await state.get_state()
+
+        # Проверяем, находимся ли мы в режиме поиска
+        data = await state.get_data()
+        is_search_mode = data.get('search_mode')
+
+        if is_search_mode:
+            search_type = data.get('search_type')
+            search_query = message.text.strip()
+
+            if search_type == "transaction":
+                trans_type = data.get('transaction_type', 'sale')
+                session_id = data.get('current_session_id')
+                if session_id:
+                    await show_transactions_list(message, state, trans_type, search_query)
+            elif search_type == "debt":
+                debt_type = data.get('debt_type', 'owed_to_me')
+                session_id = data.get('current_session_id')
+                if session_id:
+                    await show_debts_list(message, state, debt_type, search_query)
+
+            await state.clear()
+        else:
+            # Если не в режиме поиска, игнорируем сообщение
+            # Или можно показать подсказку
+            pass
+
+    # Списки, редактирование, удаление
     dp.callback_query.register(handle_edit_init,
                                F.data.startswith("edit_transaction_") | F.data.startswith("edit_debt_"))
     dp.callback_query.register(handle_edit_field, F.data.startswith("edit_field_"))
-    dp.message.register(process_edit_field, EditTransaction.field)
-    dp.message.register(process_edit_field, EditDebt.field)
 
     dp.callback_query.register(handle_repay_debt, F.data.startswith("repay_debt_"))
     dp.callback_query.register(handle_delete_confirm,

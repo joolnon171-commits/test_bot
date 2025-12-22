@@ -249,13 +249,13 @@ def get_edit_item_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     if item_type == 'transaction':
+        # Для затрат показываем только описание
+        # Чтобы узнать тип транзакции, нужно получить её из БД
+        # Но это сложно, поэтому давайте разделим логику в handlers.py
+        # Вместо этого добавим параметр
         builder.add(InlineKeyboardButton(
             text="✏️ Сумма",
             callback_data=f"edit_field_{item_type}_{item_id}_amount"
-        ))
-        builder.add(InlineKeyboardButton(
-            text="✏️ Затраты",
-            callback_data=f"edit_field_{item_type}_{item_id}_expense_amount"
         ))
         builder.add(InlineKeyboardButton(
             text="✏️ Описание",
@@ -287,8 +287,6 @@ def get_edit_item_inline(item_type: str, item_id: int) -> InlineKeyboardMarkup:
 
     builder.adjust(2)
     return builder.as_markup()
-
-
 def get_currency_inline() -> InlineKeyboardMarkup:
     """Клавиатура выбора валюты"""
     builder = InlineKeyboardBuilder()

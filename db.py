@@ -61,6 +61,14 @@ db_manager = JSONBinManager()
 
 
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ ---
+def get_transaction_type(transaction_id: int) -> Optional[str]:
+    """Возвращает тип транзакции по ID"""
+    data = db_manager._load_data()
+    trans_data = data["transactions"].get(str(transaction_id))
+
+    if trans_data:
+        return trans_data.get("type")
+    return None
 
 def ensure_user_exists(user_id: int) -> None:
     """Создает запись пользователя, если её нет"""
