@@ -5,9 +5,9 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import requests
 
-# --- НАСТРОЙКИ JSONBIN ---
-JSONBIN_API_KEY = "ваш_api_ключ_от_jsonbin"  # Получите на jsonbin.io
-MASTER_BIN_ID = "ваш_master_bin_id"  # Создайте бин и вставьте его ID
+
+JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Это ваш API KEY!
+MASTER_BIN_ID = "694818b2d0ea881f40380c8c"
 JSONBIN_BASE_URL = "https://api.jsonbin.io/v3/b"
 
 # Структура данных для хранения в JSON

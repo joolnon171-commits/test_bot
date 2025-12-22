@@ -1,7 +1,6 @@
-aiogram==3.11.1
+aiogram==3.10.0
+aiohttp==3.9.5
 requests==2.31.0
-aiohttp==3.9.1
+python-dotenv==1.0.0
+pytz==2024.1
 
-
-JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Это ваш API KEY!
-MASTER_BIN_ID = "694818b2d0ea881f40380c8c"
