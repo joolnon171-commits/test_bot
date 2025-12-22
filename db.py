@@ -1,623 +1,474 @@
-# db.py - полная исправленная версия
-
+# db.py
 import json
-import requests
+import os
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
-import time
-import logging
+from typing import List, Dict, Any, Optional
+import requests
 
-logger = logging.getLogger(__name__)
+# --- НАСТРОЙКИ JSONBIN ---
+JSONBIN_API_KEY = "ваш_api_ключ_от_jsonbin"  # Получите на jsonbin.io
+MASTER_BIN_ID = "ваш_master_bin_id"  # Создайте бин и вставьте его ID
+JSONBIN_BASE_URL = "https://api.jsonbin.io/v3/b"
 
-# --- НАСТРОЙКИ JSONBIN.IO ---
-JSONBIN_API_KEY = "$2a$10$eCHhQtmSAhD8XqkrlFgE1O6N6OKwgmHrIg.G9hlrkDKIaex3GMuiW"  # Это ваш API KEY!
-MASTER_BIN_ID = "694818b2d0ea881f40380c8c"
-
-API_URL = "https://api.jsonbin.io/v3/b"
-HEADERS = {
-    "Content-Type": "application/json",
-    "X-Master-Key": JSONBIN_API_KEY,
-    "X-Bin-Meta": "false"
+# Структура данных для хранения в JSON
+INITIAL_DATA_STRUCTURE = {
+    "users": {},
+    "sessions": {},
+    "transactions": {},
+    "debts": {}
 }
 
-# --- КЭШИРОВАНИЕ ---
-_CACHE = {}
-_CACHE_TIMESTAMP = {}
-_CACHE_TTL = 3  # Кэш на 3 секунды
 
-# В начало db.py добавьте:
-EMERGENCY_ADMIN_MODE = True  # Поставьте True для принудительного включения админа
-
-
-# Исправьте check_user_access:
-def check_user_access(user_id: int) -> bool:
-    """Проверяет доступ пользователя - с аварийным режимом"""
-    if EMERGENCY_ADMIN_MODE and user_id == 8382571809:
-        print(f"⚡ АВАРИЙНЫЙ РЕЖИМ: Принудительно даем доступ админу {user_id}")
-        return True
-
-    data = load_data_cached()
-    user = data.get("users", {}).get(str(user_id))
-
-    if not user:
-        return False
-
-    # Всегда даем доступ админу
-    if user.get("role") == "admin":
-        return True
-
-    if not user.get("has_access", False):
-        return False
-
-    # Проверяем срок доступа
-    access_until = user.get("access_until")
-    if access_until:
-        try:
-            until_date = datetime.fromisoformat(access_until)
-            if datetime.now() > until_date:
-                # Срок истек
-                user["has_access"] = False
-                user["access_until"] = None
-                save_data(data)
-                return False
-        except:
-            pass
-
-    return user.get("has_access", False)
-def clear_cache(cache_key: str = None):
-    """Очищает кэш полностью или для конкретного ключа"""
-    global _CACHE, _CACHE_TIMESTAMP
-
-    if cache_key:
-        if cache_key in _CACHE:
-            del _CACHE[cache_key]
-        if cache_key in _CACHE_TIMESTAMP:
-            del _CACHE_TIMESTAMP[cache_key]
-        logger.debug(f"Кэш очищен для ключа: {cache_key}")
-    else:
-        _CACHE.clear()
-        _CACHE_TIMESTAMP.clear()
-        logger.debug("Весь кэш очищен")
-
-
-def load_data_cached(force_refresh: bool = False) -> dict:
-    """Загружает данные с кэшированием"""
-    global _CACHE, _CACHE_TIMESTAMP
-
-    cache_key = "main_data"
-    current_time = time.time()
-
-    # Принудительное обновление или кэш устарел
-    if (force_refresh or
-            cache_key not in _CACHE or
-            current_time - _CACHE_TIMESTAMP.get(cache_key, 0) > _CACHE_TTL):
-        data = _load_data_raw()
-        _CACHE[cache_key] = data
-        _CACHE_TIMESTAMP[cache_key] = current_time
-        logger.debug(f"Данные загружены из JSONBin (force: {force_refresh})")
-        return data
-
-    logger.debug("Используются кэшированные данные")
-    return _CACHE[cache_key]
-
-
-def _load_data_raw() -> dict:
-    """Загружает сырые данные из JSONBin"""
-    try:
-        response = requests.get(f"{API_URL}/{MASTER_BIN_ID}", headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        # Проверяем структуру
-        if not data or not isinstance(data, dict):
-            logger.warning("Получены пустые данные, создаем структуру")
-            return _create_empty_structure()
-
-        # Убедимся что все ключи существуют
-        required_keys = ["users", "sessions", "transactions", "debts", "counters"]
-        for key in required_keys:
-            if key not in data:
-                logger.warning(f"Ключ '{key}' отсутствует, создаем")
-                if key == "counters":
-                    data[key] = {"session_id": 0, "transaction_id": 0, "debt_id": 0}
-                else:
-                    data[key] = {}
-
-        return data
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка сети при загрузке данных: {e}")
-        return _create_empty_structure()
-    except Exception as e:
-        logger.error(f"Неизвестная ошибка при загрузке данных: {e}")
-        return _create_empty_structure()
-
-
-def _create_empty_structure() -> dict:
-    """Создает пустую структуру данных"""
-    return {
-        "users": {},
-        "sessions": {},
-        "transactions": {},
-        "debts": {},
-        "counters": {
-            "session_id": 0,
-            "transaction_id": 0,
-            "debt_id": 0
+class JSONBinManager:
+    def __init__(self):
+        self.headers = {
+            "Content-Type": "application/json",
+            "X-Master-Key": JSONBIN_API_KEY,
         }
-    }
+        self.master_bin_id = MASTER_BIN_ID
+
+    def _load_data(self) -> Dict[str, Any]:
+        """Загружает данные из JSONBin"""
+        try:
+            response = requests.get(f"{JSONBIN_BASE_URL}/{self.master_bin_id}/latest", headers=self.headers)
+            if response.status_code == 200:
+                return response.json()["record"]
+            return INITIAL_DATA_STRUCTURE.copy()
+        except Exception as e:
+            print(f"Ошибка загрузки данных: {e}")
+            return INITIAL_DATA_STRUCTURE.copy()
+
+    def _save_data(self, data: Dict[str, Any]) -> bool:
+        """Сохраняет данные в JSONBin"""
+        try:
+            response = requests.put(f"{JSONBIN_BASE_URL}/{self.master_bin_id}", headers=self.headers, json=data)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Ошибка сохранения данных: {e}")
+            return False
+
+    def _get_next_id(self, data_type: str) -> int:
+        """Генерирует следующий ID для указанного типа данных"""
+        data = self._load_data()
+        if data_type not in data:
+            return 1
+        existing_ids = [int(id_) for id_ in data[data_type].keys() if id_.isdigit()]
+        return max(existing_ids, default=0) + 1
 
 
-def save_data(data: dict) -> bool:
-    """Сохраняет данные в JSONBin и очищает кэш"""
-    try:
-        response = requests.put(f"{API_URL}/{MASTER_BIN_ID}",
-                                json=data,
-                                headers=HEADERS,
-                                timeout=10)
-        response.raise_for_status()
-
-        # ОЧИЩАЕМ КЭШ ПОСЛЕ СОХРАНЕНИЯ - ЭТО ВАЖНО!
-        clear_cache()
-        logger.debug("Данные сохранены и кэш очищен")
-        return True
-
-    except Exception as e:
-        logger.error(f"Ошибка сохранения данных: {e}")
-        return False
+# Создаем глобальный экземпляр менеджера
+db_manager = JSONBinManager()
 
 
-def get_next_id(counter_name: str) -> int:
-    """Получает следующий ID"""
-    data = load_data_cached(force_refresh=True)  # Всегда свежие данные для счетчиков
-    data["counters"][counter_name] += 1
+# --- ФУНКЦИИ ДЛЯ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ ---
 
-    if save_data(data):
-        return data["counters"][counter_name]
-    return 0
+def ensure_user_exists(user_id: int) -> None:
+    """Создает запись пользователя, если её нет"""
+    data = db_manager._load_data()
 
-
-# --- ФУНКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ---
-
-def ensure_user_exists(user_id: int):
-    """Создает пользователя если не существует"""
-    data = load_data_cached(force_refresh=True)
-    user_id_str = str(user_id)
-
-    if user_id_str not in data["users"]:
-        data["users"][user_id_str] = {
-            "user_id": user_id,
+    if str(user_id) not in data["users"]:
+        data["users"][str(user_id)] = {
             "role": "user",
-            "has_access": False,
-            "access_until": None,
+            "access_expiry": None,
             "created_at": datetime.now().isoformat()
         }
-        save_data(data)
+        db_manager._save_data(data)
 
 
 def get_user_role(user_id: int) -> str:
-    """Получает роль пользователя"""
-    data = load_data_cached()
-    user = data.get("users", {}).get(str(user_id))
-    if user:
-        # Обрабатываем оба формата: число или строку
-        stored_id = user.get("user_id")
-        if isinstance(stored_id, str):
-            try:
-                stored_id = int(stored_id)
-            except ValueError:
-                return "user"
-
-        if stored_id == user_id:
-            return user.get("role", "user")
-    return "user"
+    """Возвращает роль пользователя"""
+    data = db_manager._load_data()
+    user = data["users"].get(str(user_id), {})
+    return user.get("role", "user")
 
 
 def check_user_access(user_id: int) -> bool:
-    """Проверяет доступ пользователя"""
-    data = load_data_cached()
-    user = data.get("users", {}).get(str(user_id))
-
-    if not user:
-        return False
+    """Проверяет, есть ли у пользователя доступ"""
+    data = db_manager._load_data()
+    user = data["users"].get(str(user_id), {})
 
     if user.get("role") == "admin":
         return True
 
-    if not user.get("has_access", False):
+    expiry_str = user.get("access_expiry")
+    if not expiry_str:
         return False
 
-    # Проверяем срок доступа
-    access_until = user.get("access_until")
-    if access_until:
-        try:
-            until_date = datetime.fromisoformat(access_until)
-            if datetime.now() > until_date:
-                # Срок истек
-                user["has_access"] = False
-                user["access_until"] = None
-                save_data(data)
-                return False
-        except:
-            pass
-
-    return user.get("has_access", False)
+    try:
+        expiry = datetime.fromisoformat(expiry_str)
+        return datetime.now() < expiry
+    except:
+        return False
 
 
-def update_user_access(user_id: int, grant_access: bool, days: int = 0):
+def update_user_access(user_id: int, has_access: bool, days: int = 30) -> None:
     """Обновляет доступ пользователя"""
-    data = load_data_cached(force_refresh=True)
-    user_id_str = str(user_id)
+    data = db_manager._load_data()
 
-    if user_id_str not in data["users"]:
-        ensure_user_exists(user_id)
-        data = load_data_cached(force_refresh=True)  # Перезагружаем
+    if str(user_id) not in data["users"]:
+        data["users"][str(user_id)] = {
+            "role": "user",
+            "access_expiry": None,
+            "created_at": datetime.now().isoformat()
+        }
 
-    user = data["users"][user_id_str]
-    user["has_access"] = grant_access
-
-    if grant_access and days > 0:
-        until_date = datetime.now() + timedelta(days=days)
-        user["access_until"] = until_date.isoformat()
+    if has_access:
+        expiry = datetime.now() + timedelta(days=days)
+        data["users"][str(user_id)]["access_expiry"] = expiry.isoformat()
     else:
-        user["access_until"] = None
+        data["users"][str(user_id)]["access_expiry"] = None
 
-    save_data(data)
-
-
-def get_all_users() -> List[Dict]:
-    """Получает всех пользователей"""
-    data = load_data_cached()
-    return list(data.get("users", {}).values())
+    db_manager._save_data(data)
 
 
-def add_admin(user_id: int):
+def add_admin(user_id: int) -> None:
     """Добавляет администратора"""
-    data = load_data_cached(force_refresh=True)
-    user_id_str = str(user_id)
+    data = db_manager._load_data()
 
-    if user_id_str not in data["users"]:
-        ensure_user_exists(user_id)
-        data = load_data_cached(force_refresh=True)
+    if str(user_id) not in data["users"]:
+        data["users"][str(user_id)] = {
+            "role": "admin",
+            "access_expiry": None,
+            "created_at": datetime.now().isoformat()
+        }
+    else:
+        data["users"][str(user_id)]["role"] = "admin"
 
-    data["users"][user_id_str]["role"] = "admin"
-    data["users"][user_id_str]["has_access"] = True
-    save_data(data)
+    db_manager._save_data(data)
 
 
-def remove_admin(user_id: int):
+def remove_admin(user_id: int) -> None:
     """Удаляет администратора"""
-    data = load_data_cached(force_refresh=True)
-    user_id_str = str(user_id)
+    data = db_manager._load_data()
 
-    if user_id_str in data["users"]:
-        data["users"][user_id_str]["role"] = "user"
-        save_data(data)
-
-
-def grant_access_to_all():
-    """Дает доступ всем пользователям"""
-    data = load_data_cached(force_refresh=True)
-    for user_id, user_data in data.get("users", {}).items():
-        user_data["has_access"] = True
-    save_data(data)
+    if str(user_id) in data["users"]:
+        data["users"][str(user_id)]["role"] = "user"
+        data["users"][str(user_id)]["access_expiry"] = None
+        db_manager._save_data(data)
 
 
-def revoke_temporary_access():
-    """Отзывает доступ у неоплативших пользователей"""
-    data = load_data_cached(force_refresh=True)
-    for user_id, user_data in data.get("users", {}).items():
+def get_all_users() -> List[Dict[str, Any]]:
+    """Возвращает список всех пользователей"""
+    data = db_manager._load_data()
+    users = []
+
+    for user_id_str, user_data in data["users"].items():
+        users.append({
+            "user_id": int(user_id_str),
+            "role": user_data.get("role", "user"),
+            "access_expiry": user_data.get("access_expiry")
+        })
+
+    return users
+
+
+def grant_access_to_all() -> None:
+    """Открывает доступ всем пользователям"""
+    data = db_manager._load_data()
+    expiry = (datetime.now() + timedelta(days=30)).isoformat()
+
+    for user_id_str, user_data in data["users"].items():
         if user_data.get("role") != "admin":
-            user_data["has_access"] = False
-            user_data["access_until"] = None
-    save_data(data)
+            data["users"][user_id_str]["access_expiry"] = expiry
+
+    db_manager._save_data(data)
 
 
-# --- ФУНКЦИИ ДЛЯ СЕССИЙ ---
+def revoke_temporary_access() -> None:
+    """Закрывает доступ всем пользователям без админки"""
+    data = db_manager._load_data()
+
+    for user_id_str, user_data in data["users"].items():
+        if user_data.get("role") != "admin":
+            data["users"][user_id_str]["access_expiry"] = None
+
+    db_manager._save_data(data)
+
+
+# --- ФУНКЦИИ ДЛЯ РАБОТЫ С СЕССИЯМИ ---
 
 def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
-    """Добавляет новую сессию"""
-    data = load_data_cached(force_refresh=True)
-
-    session_id = get_next_id("session_id")
+    """Создает новую сессию и возвращает её ID"""
+    data = db_manager._load_data()
+    session_id = db_manager._get_next_id("sessions")
 
     data["sessions"][str(session_id)] = {
-        "id": session_id,
         "user_id": user_id,
         "name": name[:50],
-        "budget": budget,
+        "budget": float(budget),
         "currency": currency,
         "is_active": True,
-        "created_at": datetime.now().isoformat()
+        "created_at": datetime.now().isoformat(),
+        "closed_at": None
     }
 
-    if save_data(data):
-        logger.info(f"Сессия '{name}' создана (ID: {session_id})")
-        return session_id
-    return 0
+    db_manager._save_data(data)
+    return session_id
 
 
 def get_user_sessions(user_id: int) -> List[tuple]:
-    """Получает сессии пользователя"""
-    data = load_data_cached()
+    """Возвращает список сессий пользователя"""
+    data = db_manager._load_data()
     sessions = []
 
-    for session in data.get("sessions", {}).values():
-        if session["user_id"] == user_id:
+    for session_id_str, session_data in data["sessions"].items():
+        if session_data.get("user_id") == user_id:
             sessions.append((
-                session["id"],
-                session["name"],
-                session["budget"],
-                session["currency"],
-                session["is_active"]
+                int(session_id_str),
+                session_data["name"],
+                session_data["budget"],
+                session_data["currency"],
+                session_data["is_active"]
             ))
 
-    # Сортируем по ID (новые сначала)
-    sessions.sort(key=lambda x: x[0], reverse=True)
-    return sessions
+    return sorted(sessions, key=lambda x: x[0])
 
 
-def get_session_details(session_id: int) -> Optional[Dict]:
-    """Получает детали сессии с расчетами"""
-    data = load_data_cached()
-    session = data.get("sessions", {}).get(str(session_id))
+def get_session_details(session_id: int) -> Optional[Dict[str, Any]]:
+    """Возвращает детали сессии с расчетами"""
+    data = db_manager._load_data()
+    session_data = data["sessions"].get(str(session_id))
 
-    if not session:
+    if not session_data:
         return None
 
-    # Рассчитываем статистику
-    total_sales = 0
-    total_expenses = 0
-    sales_count = 0
-    owed_to_me = 0
-    i_owe = 0
+    # Получаем все транзакции для сессии
+    transactions = [
+        t for t in data["transactions"].values()
+        if t.get("session_id") == session_id
+    ]
 
-    # Считаем транзакции
-    for trans in data.get("transactions", {}).values():
-        if trans["session_id"] == session_id:
-            if trans["type"] == "sale":
-                total_sales += trans["amount"]
-                total_expenses += trans.get("expense_amount", 0)
-                sales_count += 1
-            elif trans["type"] == "expense":
-                total_expenses += trans["amount"]
+    # Получаем все долги для сессии
+    debts = [
+        d for d in data["debts"].values()
+        if d.get("session_id") == session_id
+    ]
 
-    # Считаем долги
-    for debt in data.get("debts", {}).values():
-        if debt["session_id"] == session_id and not debt.get("is_repaid", False):
-            if debt["type"] == "owed_to_me":
-                owed_to_me += debt["amount"]
-            elif debt["type"] == "i_owe":
-                i_owe += debt["amount"]
+    # Расчеты
+    sales = [t for t in transactions if t.get("type") == "sale"]
+    expenses = [t for t in transactions if t.get("type") == "expense"]
+
+    total_sales = sum(t.get("amount", 0) for t in sales)
+    total_expenses = sum(t.get("expense_amount", 0) for t in sales) + sum(t.get("amount", 0) for t in expenses)
+
+    debts_owed_to_me = [d for d in debts if d.get("type") == "owed_to_me" and not d.get("is_repaid", False)]
+    debts_i_owe = [d for d in debts if d.get("type") == "i_owe" and not d.get("is_repaid", False)]
+
+    owed_to_me = sum(d.get("amount", 0) for d in debts_owed_to_me)
+    i_owe = sum(d.get("amount", 0) for d in debts_i_owe)
 
     balance = total_sales - total_expenses
 
     return {
-        "id": session["id"],
-        "name": session["name"],
-        "budget": session["budget"],
-        "currency": session["currency"],
-        "is_active": session["is_active"],
+        "name": session_data["name"],
+        "currency": session_data["currency"],
+        "budget": session_data["budget"],
+        "is_active": session_data["is_active"],
+        "balance": balance,
         "total_sales": total_sales,
         "total_expenses": total_expenses,
-        "sales_count": sales_count,
+        "sales_count": len(sales),
         "owed_to_me": owed_to_me,
-        "i_owe": i_owe,
-        "balance": balance
+        "i_owe": i_owe
     }
 
 
-def close_session(session_id: int):
+def close_session(session_id: int) -> None:
     """Закрывает сессию"""
-    data = load_data_cached(force_refresh=True)
-    session = data.get("sessions", {}).get(str(session_id))
+    data = db_manager._load_data()
 
-    if session:
-        session["is_active"] = False
-        session["closed_at"] = datetime.now().isoformat()
-        save_data(data)
+    if str(session_id) in data["sessions"]:
+        data["sessions"][str(session_id)]["is_active"] = False
+        data["sessions"][str(session_id)]["closed_at"] = datetime.now().isoformat()
+        db_manager._save_data(data)
 
 
 # --- ФУНКЦИИ ДЛЯ ТРАНЗАКЦИЙ ---
 
-def add_transaction(session_id: int, trans_type: str, amount: float,
-                    expense_amount: float = 0, description: str = "") -> int:
-    """Добавляет транзакцию"""
-    data = load_data_cached(force_refresh=True)
-
-    transaction_id = get_next_id("transaction_id")
+def add_transaction(session_id: int, trans_type: str, amount: float, expense_amount: float, description: str) -> int:
+    """Добавляет транзакцию (продажу или затрату)"""
+    data = db_manager._load_data()
+    transaction_id = db_manager._get_next_id("transactions")
 
     data["transactions"][str(transaction_id)] = {
-        "id": transaction_id,
         "session_id": session_id,
         "type": trans_type,
-        "amount": amount,
-        "expense_amount": expense_amount if trans_type == "sale" else 0,
+        "amount": float(amount),
+        "expense_amount": float(expense_amount),
         "description": description[:100],
-        "date": datetime.now().isoformat()
+        "created_at": datetime.now().isoformat()
     }
 
-    if save_data(data):
-        return transaction_id
-    return 0
+    db_manager._save_data(data)
+    return transaction_id
 
 
-def get_transactions_list(session_id: int, trans_type: str,
-                          search_query: str = None) -> List[Dict]:
-    """Получает список транзакций"""
-    data = load_data_cached()
+def get_transactions_list(session_id: int, trans_type: str = None, search_query: str = None) -> List[Dict[str, Any]]:
+    """Возвращает список транзакций с фильтрацией"""
+    data = db_manager._load_data()
     transactions = []
 
-    for trans in data.get("transactions", {}).values():
-        if trans["session_id"] == session_id and trans["type"] == trans_type:
-            # Фильтр по поиску
-            if search_query:
-                if search_query.lower() not in trans["description"].lower():
-                    continue
+    for trans_id_str, trans_data in data["transactions"].items():
+        if trans_data.get("session_id") != session_id:
+            continue
 
-            # Форматируем дату
-            try:
-                trans_date = datetime.fromisoformat(trans["date"])
-                formatted_date = trans_date.strftime("%d.%m.%Y %H:%M")
-            except:
-                formatted_date = trans["date"]
+        if trans_type and trans_data.get("type") != trans_type:
+            continue
 
-            transactions.append({
-                "id": trans["id"],
-                "description": trans["description"],
-                "amount": trans["amount"],
-                "expense_amount": trans.get("expense_amount", 0),
-                "date": formatted_date
-            })
+        if search_query:
+            desc = trans_data.get("description", "").lower()
+            if search_query.lower() not in desc:
+                continue
 
-    # Сортируем по дате (новые сначала)
-    transactions.sort(key=lambda x: x["date"], reverse=True)
-    return transactions
+        # Форматируем дату для отображения
+        try:
+            date_obj = datetime.fromisoformat(trans_data["created_at"])
+            formatted_date = date_obj.strftime("%d.%m.%Y %H:%M")
+        except:
+            formatted_date = trans_data.get("created_at", "")
+
+        transactions.append({
+            "id": int(trans_id_str),
+            "type": trans_data.get("type"),
+            "amount": trans_data.get("amount", 0),
+            "expense_amount": trans_data.get("expense_amount", 0),
+            "description": trans_data.get("description", ""),
+            "date": formatted_date
+        })
+
+    # Сортируем по дате (новые сверху)
+    return sorted(transactions, key=lambda x: x.get("date", ""), reverse=True)
 
 
-def update_transaction(trans_id: int, field: str, value: Any):
+def update_transaction(transaction_id: int, field: str, new_value: Any) -> bool:
     """Обновляет поле транзакции"""
-    data = load_data_cached(force_refresh=True)
-    trans = data.get("transactions", {}).get(str(trans_id))
+    data = db_manager._load_data()
 
-    if trans:
-        trans[field] = value
-        trans["updated_at"] = datetime.now().isoformat()
-        save_data(data)
+    if str(transaction_id) not in data["transactions"]:
+        return False
+
+    if field in ["amount", "expense_amount"]:
+        new_value = float(new_value)
+
+    data["transactions"][str(transaction_id)][field] = new_value
+    return db_manager._save_data(data)
 
 
-def delete_transaction(trans_id: int):
+def delete_transaction(transaction_id: int) -> bool:
     """Удаляет транзакцию"""
-    data = load_data_cached(force_refresh=True)
-    if str(trans_id) in data.get("transactions", {}):
-        del data["transactions"][str(trans_id)]
-        save_data(data)
+    data = db_manager._load_data()
+
+    if str(transaction_id) in data["transactions"]:
+        del data["transactions"][str(transaction_id)]
+        return db_manager._save_data(data)
+
+    return False
 
 
 # --- ФУНКЦИИ ДЛЯ ДОЛГОВ ---
 
-def add_debt(session_id: int, debt_type: str, person_name: str,
-             amount: float, description: str = "") -> int:
-    """Добавляет долг"""
-    data = load_data_cached(force_refresh=True)
-
-    debt_id = get_next_id("debt_id")
+def add_debt(session_id: int, debt_type: str, person_name: str, amount: float, description: str = "") -> int:
+    """Добавляет запись о долге"""
+    data = db_manager._load_data()
+    debt_id = db_manager._get_next_id("debts")
 
     data["debts"][str(debt_id)] = {
-        "id": debt_id,
         "session_id": session_id,
         "type": debt_type,
         "person_name": person_name[:50],
-        "amount": amount,
+        "amount": float(amount),
         "description": description[:100],
         "is_repaid": False,
         "created_at": datetime.now().isoformat()
     }
 
-    if save_data(data):
-        return debt_id
-    return 0
+    db_manager._save_data(data)
+    return debt_id
 
 
-def get_debts_list(session_id: int, debt_type: str,
-                   search_query: str = None) -> List[Dict]:
-    """Получает список долгов"""
-    data = load_data_cached()
+def get_debts_list(session_id: int, debt_type: str = None, search_query: str = None) -> List[Dict[str, Any]]:
+    """Возвращает список долгов с фильтрацией"""
+    data = db_manager._load_data()
     debts = []
 
-    for debt in data.get("debts", {}).values():
-        if debt["session_id"] == session_id and debt["type"] == debt_type:
-            # Фильтр по поиску
-            if search_query:
-                if (search_query.lower() not in debt["person_name"].lower() and
-                        search_query.lower() not in debt["description"].lower()):
-                    continue
+    for debt_id_str, debt_data in data["debts"].items():
+        if debt_data.get("session_id") != session_id:
+            continue
 
-            # Форматируем дату
-            try:
-                debt_date = datetime.fromisoformat(debt["created_at"])
-                formatted_date = debt_date.strftime("%d.%m.%Y %H:%M")
-            except:
-                formatted_date = debt["created_at"]
+        if debt_type and debt_data.get("type") != debt_type:
+            continue
 
-            debts.append({
-                "id": debt["id"],
-                "person_name": debt["person_name"],
-                "description": debt["description"],
-                "amount": debt["amount"],
-                "date": formatted_date,
-                "is_repaid": debt.get("is_repaid", False)
-            })
+        if search_query:
+            person = debt_data.get("person_name", "").lower()
+            desc = debt_data.get("description", "").lower()
+            if search_query.lower() not in person and search_query.lower() not in desc:
+                continue
 
-    # Сортируем по дате (новые сначала)
-    debts.sort(key=lambda x: x["date"], reverse=True)
-    return debts
+        # Форматируем дату
+        try:
+            date_obj = datetime.fromisoformat(debt_data["created_at"])
+            formatted_date = date_obj.strftime("%d.%m.%Y %H:%M")
+        except:
+            formatted_date = debt_data.get("created_at", "")
+
+        debts.append({
+            "id": int(debt_id_str),
+            "type": debt_data.get("type"),
+            "person_name": debt_data.get("person_name", ""),
+            "amount": debt_data.get("amount", 0),
+            "description": debt_data.get("description", ""),
+            "is_repaid": debt_data.get("is_repaid", False),
+            "date": formatted_date
+        })
+
+    return sorted(debts, key=lambda x: x.get("date", ""), reverse=True)
 
 
-def update_debt(debt_id: int, field: str, value: Any):
+def update_debt(debt_id: int, field: str, new_value: Any) -> bool:
     """Обновляет поле долга"""
-    data = load_data_cached(force_refresh=True)
-    debt = data.get("debts", {}).get(str(debt_id))
+    data = db_manager._load_data()
 
-    if debt:
-        if field == "is_repaid" and value == 1:
-            debt["is_repaid"] = True
-            debt["repaid_at"] = datetime.now().isoformat()
-        else:
-            debt[field] = value
-        debt["updated_at"] = datetime.now().isoformat()
-        save_data(data)
+    if str(debt_id) not in data["debts"]:
+        return False
+
+    if field == "amount":
+        new_value = float(new_value)
+    elif field == "is_repaid":
+        new_value = bool(int(new_value)) if isinstance(new_value, (int, str)) else bool(new_value)
+
+    data["debts"][str(debt_id)][field] = new_value
+    return db_manager._save_data(data)
 
 
-def delete_debt(debt_id: int):
-    """Удаляет долг"""
-    data = load_data_cached(force_refresh=True)
-    if str(debt_id) in data.get("debts", {}):
+def delete_debt(debt_id: int) -> bool:
+    """Удаляет запись о долге"""
+    data = db_manager._load_data()
+
+    if str(debt_id) in data["debts"]:
         del data["debts"][str(debt_id)]
-        save_data(data)
+        return db_manager._save_data(data)
+
+    return False
 
 
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ---
+# --- ИНИЦИАЛИЗАЦИЯ ---
 
-def init_db():
-    """Инициализирует базу данных"""
-    logger.info("Инициализация базы данных...")
+def init_db() -> None:
+    """Инициализирует базу данных в JSONBin"""
+    data = db_manager._load_data()
 
-    data = load_data_cached(force_refresh=True)
+    # Проверяем структуру данных
+    for key in INITIAL_DATA_STRUCTURE.keys():
+        if key not in data:
+            data[key] = INITIAL_DATA_STRUCTURE[key]
 
-    # Создаем главного админа если нет
-    admin_id = 8382571809
-    admin_id_str = str(admin_id)
-
-    if admin_id_str not in data.get("users", {}):
-        logger.info("Админ не найден, создаем...")
-        data.setdefault("users", {})[admin_id_str] = {
-            "user_id": admin_id,
+    # Добавляем главного администратора, если его нет
+    if "8382571809" not in data["users"]:
+        data["users"]["8382571809"] = {
             "role": "admin",
-            "has_access": True,
-            "access_until": None,
+            "access_expiry": None,
             "created_at": datetime.now().isoformat()
         }
-        save_data(data)
-        logger.info("Главный админ создан")
-    else:
-        admin_data = data["users"][admin_id_str]
-        logger.info(f"Админ найден: роль={admin_data.get('role')}")
 
-        # Исправляем если что-то не так
-        if admin_data.get('role') != 'admin':
-            admin_data['role'] = 'admin'
-            admin_data['has_access'] = True
-            save_data(data)
-            logger.info("Роль админа исправлена")
-
-    logger.info("Инициализация завершена")
-    return True
-
-
-# --- ОБРАТНАЯ СОВМЕСТИМОСТЬ ---
-def load_data() -> dict:
-    """Алиас для обратной совместимости (используется в keyboards.py)"""
-    import warnings
-    warnings.warn("load_data() устарела, используйте load_data_cached()", DeprecationWarning)
-    return load_data_cached()
+    db_manager._save_data(data)
+    print("База данных инициализирована в JSONBin")
