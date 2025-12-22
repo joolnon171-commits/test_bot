@@ -1039,7 +1039,6 @@ async def show_report(callback: CallbackQuery, state: FSMContext):
 
 
 # --- АДМИН-ПАНЕЛЬ ---
-
 async def admin_panel_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик админ-панели"""
     action = callback.data.split('_', 1)[1]
@@ -1095,28 +1094,34 @@ async def admin_panel_handler(callback: CallbackQuery, state: FSMContext):
         await state.set_state(AdminManageAccess.close_user)
 
     elif action == "open_all":
-        grant_access_to_all()
+        # ИСПРАВЛЕНО: Не нужно вводить ID, просто открываем доступ всем
+        success = grant_access_to_all()
+        if success:
+            reply_text = "✅ Доступ для всех пользователей открыт на 30 дней."
+        else:
+            reply_text = "❌ Ошибка при открытии доступа всем."
+
         try:
-            await callback.message.edit_text("✅ Доступ для всех пользователей открыт.",
-                                             reply_markup=get_access_management_inline())
+            await callback.message.edit_text(reply_text, reply_markup=get_access_management_inline())
         except Exception as e:
             logger.error(f"Ошибка при редактировании сообщения: {e}")
-            await callback.bot.send_message(
-                callback.from_user.id,
-                "✅ Доступ для всех пользователей открыт.",
-                reply_markup=get_access_management_inline())
+            await callback.bot.send_message(callback.from_user.id, reply_text,
+                                            reply_markup=get_access_management_inline())
 
     elif action == "close_all":
-        revoke_temporary_access()
+        # ИСПРАВЛЕНО: Закрываем доступ всем неоплатившим
+        success = revoke_temporary_access()
+        if success:
+            reply_text = "✅ Доступ для неоплативших пользователей закрыт."
+        else:
+            reply_text = "❌ Ошибка при закрытии доступа."
+
         try:
-            await callback.message.edit_text("✅ Доступ для неоплативших пользователей закрыт.",
-                                             reply_markup=get_access_management_inline())
+            await callback.message.edit_text(reply_text, reply_markup=get_access_management_inline())
         except Exception as e:
             logger.error(f"Ошибка при редактировании сообщения: {e}")
-            await callback.bot.send_message(
-                callback.from_user.id,
-                "✅ Доступ для неоплативших пользователей закрыт.",
-                reply_markup=get_access_management_inline())
+            await callback.bot.send_message(callback.from_user.id, reply_text,
+                                            reply_markup=get_access_management_inline())
 
     elif action == "add_admin":
         try:
@@ -1147,7 +1152,7 @@ async def admin_panel_handler(callback: CallbackQuery, state: FSMContext):
         await state.update_data(audience=audience)
 
         try:
-            await callback.message.edit_text("Введите текст для рассылки.", reply_markup=get_cancel_inline())
+            await callback.message.edit_text("Введите текст для рассылки:", reply_markup=get_cancel_inline())
         except Exception as e:
             logger.error(f"Ошибка при редактировании сообщения: {e}")
             await callback.bot.send_message(
@@ -1158,7 +1163,6 @@ async def admin_panel_handler(callback: CallbackQuery, state: FSMContext):
         await state.set_state(AdminBroadcast.text)
 
     await callback.answer()
-
 
 async def process_open_user_access(message: Message, state: FSMContext):
     """Обработчик открытия доступа пользователю"""
@@ -1260,26 +1264,28 @@ async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
     success_count = 0
     failed_count = 0
 
+    # Отправляем сообщение о начале рассылки
+    await message.answer(f"📤 Начинаю рассылку для {len(users_to_send)} пользователей...")
+
     for user_id in users_to_send:
         try:
             await bot.send_message(chat_id=user_id, text=message.text)
             success_count += 1
-            await asyncio.sleep(0.05)  # Задержка чтобы не превысить лимиты Telegram
+            await asyncio.sleep(0.1)  # Задержка чтобы не превысить лимиты Telegram
         except Exception as e:
             failed_count += 1
             logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
 
-    await message.answer(
+    result_text = (
         f"✅ Рассылка завершена.\n"
         f"Успешно отправлено: {success_count}\n"
         f"Не удалось отправить: {failed_count}\n"
         f"Всего пользователей: {len(users_to_send)}"
     )
 
+    await message.answer(result_text)
     await state.clear()
     await show_main_menu(message, state)
-
-
 # --- РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ---
 def register_handlers(dp: Dispatcher):
     """Регистрирует все обработчики в диспетчере."""
@@ -1299,7 +1305,7 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(debt_category_handler, F.data.startswith("debt_"))
     dp.callback_query.register(handle_list_debts, F.data.startswith("list_debts_"))
 
-    # FSM для транзакций и долгов - ДОЛЖНЫ БЫТЬ ПЕРВЫМИ
+    # FSM для транзакций и долгов - ВЫСОКИЙ ПРИОРИТЕТ
     dp.message.register(process_sale_amount, AddSale.amount)
     dp.message.register(process_sale_expense, AddSale.expense)
     dp.message.register(process_sale_description, AddSale.description)
@@ -1309,27 +1315,33 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(process_debt_person_name, AddDebt.person_name)
     dp.message.register(process_debt_description, AddDebt.description)
 
-    # Редактирование - ТОЖЕ ВАЖНЫЙ ПРИОРИТЕТ
+    # Редактирование - ТОЖЕ ВЫСОКИЙ ПРИОРИТЕТ
     dp.message.register(process_edit_field, EditTransaction.field)
     dp.message.register(process_edit_field, EditDebt.field)
 
-    # Поиск - НИЗКИЙ ПРИОРИТЕТ
+    # АДМИНСКИЕ ОБРАБОТЧИКИ - ОЧЕНЬ ВАЖНО: регистрируем ДО общего обработчика текста
+    dp.message.register(process_open_user_access, AdminManageAccess.open_user)
+    dp.message.register(process_close_user_access, AdminManageAccess.close_user)
+    dp.message.register(process_add_admin, AdminManageAdmins.add)
+    dp.message.register(process_remove_admin, AdminManageAdmins.remove)
+    dp.message.register(process_broadcast, AdminBroadcast.text)
+
+    # Поиск - обработчик callback для начала поиска
     dp.callback_query.register(handle_search, F.data.startswith("search_"))
 
-    # Убрали общий обработчик process_search, так как он мешает другим состояниям
-
-    # Вместо этого добавим специфический обработчик для поиска
-    # Он будет срабатывать только когда есть специальный флаг в состоянии
+    # ОБЩИЙ ОБРАБОТЧИК ТЕКСТА - должен быть ПОСЛЕ всех FSM состояний
     @dp.message(F.text)
     async def handle_text_messages(message: Message, state: FSMContext):
         """Обработчик текстовых сообщений с проверкой состояния"""
         current_state = await state.get_state()
 
-        # Проверяем, находимся ли мы в режиме поиска
-        data = await state.get_data()
-        is_search_mode = data.get('search_mode')
+        # Если есть активное состояние FSM, то сообщение уже обработано соответствующим хендлером
+        if current_state:
+            return
 
-        if is_search_mode:
+        # Если нет активного состояния, проверяем поиск
+        data = await state.get_data()
+        if data.get('waiting_for_search'):
             search_type = data.get('search_type')
             search_query = message.text.strip()
 
@@ -1345,10 +1357,7 @@ def register_handlers(dp: Dispatcher):
                     await show_debts_list(message, state, debt_type, search_query)
 
             await state.clear()
-        else:
-            # Если не в режиме поиска, игнорируем сообщение
-            # Или можно показать подсказку
-            pass
+            return
 
     # Списки, редактирование, удаление
     dp.callback_query.register(handle_edit_init,
@@ -1361,10 +1370,5 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(process_confirmation, F.data.startswith("confirm_"))
     dp.callback_query.register(cancel_edit, F.data.startswith("cancel_edit_"))
 
-    # Админ-панель
+    # Админ-панель - ОБЯЗАТЕЛЬНО ПОСЛЕДНИМИ, так как они перехватывают 'admin_'
     dp.callback_query.register(admin_panel_handler, F.data.startswith("admin_"))
-    dp.message.register(process_open_user_access, AdminManageAccess.open_user)
-    dp.message.register(process_close_user_access, AdminManageAccess.close_user)
-    dp.message.register(process_add_admin, AdminManageAdmins.add)
-    dp.message.register(process_remove_admin, AdminManageAdmins.remove)
-    dp.message.register(process_broadcast, AdminBroadcast.text)

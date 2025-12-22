@@ -170,29 +170,35 @@ def get_all_users() -> List[Dict[str, Any]]:
     return users
 
 
-def grant_access_to_all() -> None:
-    """Открывает доступ всем пользователям"""
+def grant_access_to_all() -> bool:
+    """Открывает доступ всем пользователям на 30 дней"""
     data = db_manager._load_data()
     expiry = (datetime.now() + timedelta(days=30)).isoformat()
 
-    for user_id_str, user_data in data["users"].items():
-        if user_data.get("role") != "admin":
-            data["users"][user_id_str]["access_expiry"] = expiry
+    try:
+        for user_id_str, user_data in data["users"].items():
+            if user_data.get("role") != "admin":
+                data["users"][user_id_str]["access_expiry"] = expiry
 
-    db_manager._save_data(data)
+        return db_manager._save_data(data)
+    except Exception as e:
+        print(f"Ошибка при открытии доступа всем: {e}")
+        return False
 
 
-def revoke_temporary_access() -> None:
+def revoke_temporary_access() -> bool:
     """Закрывает доступ всем пользователям без админки"""
     data = db_manager._load_data()
 
-    for user_id_str, user_data in data["users"].items():
-        if user_data.get("role") != "admin":
-            data["users"][user_id_str]["access_expiry"] = None
+    try:
+        for user_id_str, user_data in data["users"].items():
+            if user_data.get("role") != "admin":
+                data["users"][user_id_str]["access_expiry"] = None
 
-    db_manager._save_data(data)
-
-
+        return db_manager._save_data(data)
+    except Exception as e:
+        print(f"Ошибка при закрытии доступа всем: {e}")
+        return False
 # --- ФУНКЦИИ ДЛЯ РАБОТЫ С СЕССИЯМИ ---
 
 def add_session(user_id: int, name: str, budget: float, currency: str) -> int:
